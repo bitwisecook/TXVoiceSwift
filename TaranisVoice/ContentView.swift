@@ -150,7 +150,7 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     ) -> AVAudioPCMBuffer {
         let inputFormat = buffer.format
         let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
+            commonFormat: .pcmFormatInt16,
             sampleRate: newSampleRate,
             channels: 1,
             interleaved: false)!
@@ -355,7 +355,7 @@ struct ContentView: View {
             Image("TaranisVoiceLogo")  // Make sure to add this image to your asset catalog
                 .resizable()
                 .scaledToFit()
-                .frame(height: 120)  // Adjust this value to fit your logo
+                .frame(height: 120)
                 .padding(.top, 10)
 
             // Divider line
@@ -364,10 +364,12 @@ struct ContentView: View {
                 .frame(height: 1)
                 .padding(.horizontal, -20)
 
+            // Utterance
             TextField("Phrase", text: $inputText)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding()
 
+            // Voice to use
             Picker("Select Voice", selection: $selectedVoice) {
                 ForEach(availableVoices, id: \.identifier) { voice in
                     Text(voice.name).tag(voice)
@@ -379,20 +381,7 @@ struct ContentView: View {
                     newVoice.identifier, forKey: "SelectedVoiceIdentifier")
             }
 
-            HStack {
-                Button("Preview") {
-                    Task {
-                        await viewModel.speak(inputText, voice: selectedVoice)
-                    }
-                }
-                .disabled(isSaving || isTemporarilyDisabled)
-
-                Button("Save to .wav") {
-                    showSaveDialog()
-                }
-                .disabled(isSaving || isTemporarilyDisabled)
-            }
-
+            // Sample rate selection
             HStack(spacing: 20) {
                 ForEach(SampleRate.allCases) { rate in
                     Button(action: {
@@ -421,6 +410,27 @@ struct ContentView: View {
             }
             .padding(.horizontal)
 
+            // Actions
+            HStack {
+                Button("Preview") {
+                    Task {
+                        await viewModel.speak(inputText, voice: selectedVoice)
+                    }
+                }
+                .disabled(isSaving || isTemporarilyDisabled)
+                
+                Button("Save to .wav") {
+                    showSaveDialog()
+                }
+                .disabled(isSaving || isTemporarilyDisabled)
+            }
+
+            // Divider line
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(height: 1)
+                .padding(.horizontal, -20)
+
             ZStack {
                 if isSaving {
                     ProgressView(value: viewModel.progress) {
@@ -430,6 +440,8 @@ struct ContentView: View {
                 } else if showDoneMessage {
                     Text("Done")
                         .foregroundColor(.green)
+                        .bold()
+                        .font(.system(size: 24))
                         .opacity(doneOpacity)
                 }
             }
@@ -437,7 +449,7 @@ struct ContentView: View {
             .padding(.vertical, 10)
         }
         .padding()
-        .frame(width: 400, height: 340)
+        .frame(width: 400)
     }
 
     private func showSaveDialog() {
