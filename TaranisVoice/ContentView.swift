@@ -24,61 +24,45 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 {
     let synthesizer: AVSpeechSynthesizer
     var audioFile: AVAudioFile?
+    var accumulatedBuffer: AVAudioPCMBuffer?
 
     @Published var isRecording = false
     @Published var progress: Double = 0.0
     private var outputURL: URL?
-    private var audioEngine: AVAudioEngine
-    private var mainMixerNode: AVAudioMixerNode
-    private var totalSamples: Int = 0
-    private var processedSamples: Int = 0
-    private var estimatedTotalSamples: Int = 0
+    private var selectedSampleRate: SampleRate = .default
 
     override init() {
         self.synthesizer = AVSpeechSynthesizer()
-        self.audioEngine = AVAudioEngine()
-        self.mainMixerNode = self.audioEngine.mainMixerNode
         super.init()
         self.synthesizer.delegate = self
     }
 
-    func speak(_ text: String, voice: AVSpeechSynthesisVoice) async -> Bool {
-        return await withCheckedContinuation { continuation in
-            let utterance = AVSpeechUtterance(string: text)
-            utterance.voice = voice
-            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-            utterance.volume = 1.0
-
-            synthesizer.speak(utterance)
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                continuation.resume(returning: true)
-            }
-        }
+    func setSampleRate(_ sampleRate: SampleRate) {
+        selectedSampleRate = sampleRate
     }
 
-    func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice) async -> Bool {
-        print("Starting speakAndSave")
+    func speak(_ text: String, voice: AVSpeechSynthesisVoice) async -> Bool {
         let utterance = createUtterance(text: text, voice: voice)
-        print("Created utterance")
-        
-        // Reset progress tracking
-        totalSamples = 0
-        processedSamples = 0
+        synthesizer.speak(utterance)
+        return true
+    }
+    func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice) async
+        -> Bool
+    {
+        let utterance = createUtterance(text: text, voice: voice)
+
+        // Reset progress and buffer
         progress = 0.0
-        estimatedTotalSamples = estimateTotalSamples(for: text)
-        print("Estimated total samples: \(estimatedTotalSamples)")
-        
+        accumulatedBuffer = nil
+
         do {
-            print("Attempting to start audio engine")
-            try startAudioEngine()
-            print("Audio engine started successfully")
+            try startRecording(to: outputURL!)
         } catch {
-            print("Failed to start audio engine: \(error)")
+            print("Failed to start recording: \(error)")
             return false
         }
-        
-        return await synthesizeAndWrite(utterance: utterance)
+
+        return await synthesizeAndAccumulate(utterance: utterance)
     }
 
     private func createUtterance(text: String, voice: AVSpeechSynthesisVoice)
@@ -91,13 +75,14 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         return utterance
     }
 
-    private func synthesizeAndWrite(utterance: AVSpeechUtterance) async -> Bool
+    private func synthesizeAndAccumulate(utterance: AVSpeechUtterance) async
+        -> Bool
     {
         await withCheckedContinuation { continuation in
             synthesizer.write(utterance) { [weak self] buffer in
                 guard let self = self else { return }
                 Task {
-                    await self.processBuffer(buffer)
+                    await self.accumulateBuffer(buffer)
                 }
             }
 
@@ -107,42 +92,115 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
     }
 
-    private func processBuffer(_ buffer: AVAudioBuffer) async {
-        print("Received buffer of type: \(type(of: buffer))")
-        
+    private func accumulateBuffer(_ buffer: AVAudioBuffer) async {
         guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
-            print("Failed to cast buffer to AVAudioPCMBuffer")
             return
         }
-        
-        print("PCM Buffer frame length: \(pcmBuffer.frameLength)")
-        print("PCM Buffer format: \(pcmBuffer.format)")
-        
-        guard pcmBuffer.frameLength > 0 else {
-            print("Received empty buffer (frameLength = 0)")
+
+        if accumulatedBuffer == nil {
+            accumulatedBuffer = pcmBuffer
+        } else {
+            accumulatedBuffer = mergeBuffers(
+                buffer1: accumulatedBuffer!, buffer2: pcmBuffer)
+        }
+    }
+
+    private func mergeBuffers(
+        buffer1: AVAudioPCMBuffer, buffer2: AVAudioPCMBuffer
+    ) -> AVAudioPCMBuffer {
+        let newFrameLength = buffer1.frameLength + buffer2.frameLength
+        let mergedBuffer = AVAudioPCMBuffer(
+            pcmFormat: buffer1.format,
+            frameCapacity: newFrameLength
+        )!
+
+        mergedBuffer.frameLength = newFrameLength
+        memcpy(
+            mergedBuffer.floatChannelData![0], buffer1.floatChannelData![0],
+            Int(buffer1.frameLength) * MemoryLayout<Float>.size)
+        memcpy(
+            mergedBuffer.floatChannelData![0].advanced(
+                by: Int(buffer1.frameLength)), buffer2.floatChannelData![0],
+            Int(buffer2.frameLength) * MemoryLayout<Float>.size)
+
+        return mergedBuffer
+    }
+
+    func startRecording(to url: URL) throws {
+        outputURL = url
+        isRecording = true
+    }
+
+    func stopRecording() async {
+        guard let accumulatedBuffer = accumulatedBuffer else {
+            print("No accumulated buffer to save")
             return
         }
-        await writeAudioBufferToFile(pcmBuffer)
-        processedSamples += Int(pcmBuffer.frameLength)
-        updateProgress()
-    }
+        print("Output URL: \(String(describing: outputURL))")
+        print("Buffer format before resampling: \(accumulatedBuffer.format)")
 
-    private func startAudioEngine() throws {
-        print("Resetting audio engine")
-        audioEngine.reset()
-        
-        print("Preparing audio engine")
-        audioEngine.prepare()
-        
-        print("Starting audio engine")
-        try audioEngine.start()
-        print("Audio engine started")
-    }
+        // Resample the accumulated buffer to the selected sample rate
+        let resampledBuffer = resample(
+            buffer: accumulatedBuffer,
+            toSampleRate: Double(selectedSampleRate.rawValue))
+        print(
+            "Buffer format before changing bit depth: \(resampledBuffer.format)"
+        )
 
-    private var selectedSampleRate: SampleRate = .default
+        do {
+            let settings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: Double(selectedSampleRate.rawValue),
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,  // Ensure 16-bit depth
+                AVLinearPCMIsFloatKey: false,  // Ensure Int16 format
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ]
 
-    func setSampleRate(_ sampleRate: SampleRate) {
-        selectedSampleRate = sampleRate
+            print("Settings: \(settings)")
+
+            // Create the AVAudioFile with the settings
+            let audioFile = try AVAudioFile(
+                forWriting: outputURL!, settings: settings)
+
+            // Ensure the buffer frame length is not zero before writing
+            guard resampledBuffer.frameLength > 0 else {
+                print("Buffer has no frames to write")
+                return
+            }
+
+            // Ensure the buffer formats are equivalent
+            guard audioFile.processingFormat == resampledBuffer.format else {
+                print(
+                    "Format mismatch: file \(audioFile.processingFormat) vs resampledBuffer \(resampledBuffer.format)"
+                )
+                return
+            }
+
+            // ensure the file is writable
+            guard FileManager.default.isWritableFile(atPath: outputURL!.path)
+            else {
+                print("The file path: '\(outputURL!.path)' is not writable.")
+                return
+            }
+
+            // Attempt to write the buffer to the file
+            print("Attempting to write the buffer to file...")
+            try audioFile.write(from: resampledBuffer)
+            print("Audio saved successfully.")
+
+            // Log file format after writing
+            print("Audio file format after writing: \(audioFile.fileFormat)")
+        } catch {
+            let nsError = error as NSError
+            print("Error writing to audio file: \(nsError)")
+            print(
+                "Error localized description: \(nsError.localizedDescription)")
+            print("AVAudioFile error details: \(nsError.userInfo)")
+        }
+
+        isRecording = false
     }
 
     private func resample(
@@ -150,10 +208,8 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     ) -> AVAudioPCMBuffer {
         let inputFormat = buffer.format
         let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatInt16,
-            sampleRate: newSampleRate,
-            channels: 1,
-            interleaved: false)!
+            commonFormat: .pcmFormatFloat32, sampleRate: newSampleRate,
+            channels: 1, interleaved: false)!
 
         guard
             let converter = AVAudioConverter(
@@ -177,11 +233,8 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
 
         var error: NSError?
-
-        let status = converter.convert(
-            to: outputBuffer,
-            error: &error
-        ) { inNumPackets, outStatus in
+        let _ = converter.convert(to: outputBuffer, error: &error) {
+            inNumPackets, outStatus in
             if buffer.frameLength > 0 {
                 outStatus.pointee = .haveData
                 return buffer
@@ -193,84 +246,10 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
         if let error = error {
             print("Error during conversion: \(error)")
-            print("Input buffer format: \(inputFormat)")
-            print("Input buffer frame length: \(buffer.frameLength)")
-            print("Output buffer format: \(outputFormat)")
-            print("Estimated output frame count: \(estimatedOutputFrameCount)")
-            print("Conversion status: \(status)")
             return buffer
         }
 
-        print(
-            "Resampling completed. Input frames: \(buffer.frameLength), Output frames: \(outputBuffer.frameLength)"
-        )
-
         return outputBuffer
-    }
-
-    private func writeAudioBufferToFile(_ buffer: AVAudioPCMBuffer) async {
-        guard isRecording, let audioFile = audioFile else {
-            print("Not recording or audioFile is nil")
-            return
-        }
-
-        let resampledBuffer = resample(
-            buffer: buffer, toSampleRate: Double(selectedSampleRate.rawValue))
-
-        do {
-            try audioFile.write(from: resampledBuffer)
-            print(
-                "Written to file. Buffer frame length: \(resampledBuffer.frameLength)"
-            )
-        } catch {
-            print("Error writing to audio file: \(error)")
-            print("Audio file format: \(audioFile.fileFormat)")
-            print("Resampled buffer format: \(resampledBuffer.format)")
-            print(
-                "Resampled buffer frame length: \(resampledBuffer.frameLength)")
-        }
-    }
-
-    func startRecording(to url: URL) throws {
-        outputURL = url
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: Double(selectedSampleRate.rawValue),
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-        ]
-        audioFile = try AVAudioFile(forWriting: url, settings: settings)
-        isRecording = true
-    }
-
-    func stopRecording() {
-        audioFile = nil
-        outputURL = nil
-        isRecording = false
-        audioEngine.stop()
-    }
-
-    private func updateProgress() {
-        progress = min(
-            Double(processedSamples) / Double(estimatedTotalSamples), 1.0)
-    }
-
-    private func estimateTotalSamples(for text: String) -> Int {
-        // Estimate based on average speaking rate and sample rate
-        let averageSamplesPerCharacter = 220.5 * 22050 / 1000  // Assuming 220.5 ms per character and 22050 Hz sample rate
-        return Int(Double(text.count) * averageSamplesPerCharacter)
-    }
-
-    nonisolated func speechSynthesizer(
-        _ synthesizer: AVSpeechSynthesizer,
-        didFinish utterance: AVSpeechUtterance
-    ) {
-        Task { [weak self] in
-            await self?.stopRecording()
-        }
     }
 }
 
@@ -418,7 +397,7 @@ struct ContentView: View {
                     }
                 }
                 .disabled(isSaving || isTemporarilyDisabled)
-                
+
                 Button("Save to .wav") {
                     showSaveDialog()
                 }
@@ -443,6 +422,10 @@ struct ContentView: View {
                         .bold()
                         .font(.system(size: 24))
                         .opacity(doneOpacity)
+                } else {
+                    Text("idle")
+                        .foregroundColor(
+                            .init(hue: 1.0, saturation: 0.0, brightness: 0.3))
                 }
             }
             .frame(height: 30)
