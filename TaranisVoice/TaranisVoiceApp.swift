@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct TaranisVoiceApp: App {
+struct TextToSpeechApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
