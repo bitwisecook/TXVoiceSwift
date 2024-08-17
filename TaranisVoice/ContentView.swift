@@ -98,7 +98,7 @@ struct VoicePickerView: View {
                 } else if selection.quality == .enhanced {
                     ColoredSFSymbol(
                         systemName: "waveform.badge.plus",
-                        color: .yellow
+                        color: Color("VoiceMenuEnhancedColor")
                     )
                 }
             }
