@@ -16,9 +16,12 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     var accumulatedBuffer: AVAudioPCMBuffer?
 
     @Published var isRecording = false
+    @Published var isPreviewing = false
     @Published var progress: Double = 0.0
     private var outputURL: URL?
     private var selectedSampleRate: SampleRate = .default
+    private var currentUtteranceID: UUID?
+    private var utteranceIDs: [ObjectIdentifier: UUID] = [:]
 
     override init() {
         self.synthesizer = AVSpeechSynthesizer()
@@ -30,12 +33,59 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         selectedSampleRate = sampleRate
     }
 
-    func speak(_ text: String, voice: AVSpeechSynthesisVoice) async -> Bool {
-        LogManager.shared.addLog(
-            "Speaking text '\(text)' using voice '\(voice.name)'")
+    func speak(_ text: String, voice: AVSpeechSynthesisVoice) async {
         let utterance = createUtterance(text: text, voice: voice)
-        synthesizer.speak(utterance)
-        return true
+        let utteranceID = UUID()
+        let utteranceObjectID = ObjectIdentifier(utterance)
+        utteranceIDs[utteranceObjectID] = utteranceID
+        currentUtteranceID = utteranceID
+        isPreviewing = true
+        return await withCheckedContinuation { continuation in
+            synthesizer.speak(utterance)
+            Task {
+                await waitForSpeechCompletion()
+                continuation.resume()
+            }
+        }
+    }
+
+    private func waitForSpeechCompletion() async {
+        while isPreviewing {
+            try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1 second
+        }
+    }
+
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didFinish utterance: AVSpeechUtterance
+    ) {
+        let utteranceObjectID = ObjectIdentifier(utterance)
+        Task { [weak self] in
+            await self?.handleSpeechFinished(
+                utteranceObjectID: utteranceObjectID)
+        }
+    }
+
+    private func handleSpeechFinished(utteranceObjectID: ObjectIdentifier) {
+        if let utteranceID = utteranceIDs[utteranceObjectID],
+            utteranceID == currentUtteranceID
+        {
+            isPreviewing = false
+            currentUtteranceID = nil
+            utteranceIDs.removeValue(forKey: utteranceObjectID)
+        }
+    }
+
+    private func createUtterance(text: String, voice: AVSpeechSynthesisVoice)
+        -> AVSpeechUtterance
+    {
+        LogManager.shared.addLog(
+            "Creating utterance for text '\(text)' using voice '\(voice.name)'")
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = voice
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.volume = 1.0
+        return utterance
     }
 
     func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice)
@@ -54,18 +104,6 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         try startRecording(to: outputURL)
 
         return try await synthesizeAndAccumulate(utterance: utterance)
-    }
-
-    private func createUtterance(text: String, voice: AVSpeechSynthesisVoice)
-        -> AVSpeechUtterance
-    {
-        LogManager.shared.addLog(
-            "Creating utterance for text '\(text)' using voice '\(voice.name)'")
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = voice
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        utterance.volume = 1.0
-        return utterance
     }
 
     private func synthesizeAndAccumulate(utterance: AVSpeechUtterance)

@@ -3,6 +3,8 @@ import SwiftUI
 
 enum SaveStatus {
     case idle
+    case previewing
+    case saving
     case success
     case failure
 }
@@ -27,6 +29,7 @@ enum SampleRate: Int, CaseIterable, Identifiable {
 
 @MainActor
 class SpeechSynthesizerViewModel: ObservableObject {
+    @Published var isPreviewInProgress = false
     @Published var isRecording = false
     @Published var progress: Double = 0.0
     @Published var selectedSampleRate: SampleRate = .default
@@ -46,8 +49,10 @@ class SpeechSynthesizerViewModel: ObservableObject {
         }
     }
 
-    func speak(_ text: String, voice: AVSpeechSynthesisVoice) async -> Bool {
-        return await synthesizer.speak(text, voice: voice)
+    func speak(_ text: String, voice: AVSpeechSynthesisVoice) async {
+        isPreviewInProgress = true
+        defer { isPreviewInProgress = false }
+        await synthesizer.speak(text, voice: voice)
     }
 
     func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice)
@@ -72,7 +77,7 @@ struct ContentView: View {
     @State private var selectedVoice: AVSpeechSynthesisVoice
     @State private var availableVoices: [AVSpeechSynthesisVoice] = []
     @StateObject private var viewModel = SpeechSynthesizerViewModel()
-    @State private var isSaving = false
+    @State private var isSaveInProgress = false
     @State private var isTemporarilyDisabled = false
     @State private var showDoneMessage = false
     @State private var doneOpacity: Double = 1.0
@@ -171,15 +176,26 @@ struct ContentView: View {
             HStack {
                 Button("Preview") {
                     Task {
+                        saveStatus = .previewing
                         await viewModel.speak(inputText, voice: selectedVoice)
+                        saveStatus = .idle
                     }
                 }
-                .disabled(isSaving || isTemporarilyDisabled)
+                .disabled(
+                    isSaveInProgress
+                        || viewModel.isPreviewInProgress
+                        || isTemporarilyDisabled)
 
                 Button("Save to .wav") {
-                    showSaveDialog()
+                    Task {
+                        saveStatus = .saving
+                        showSaveDialog()
+                    }
                 }
-                .disabled(isSaving || isTemporarilyDisabled)
+                .disabled(
+                    isSaveInProgress
+                        || viewModel.isPreviewInProgress
+                        || isTemporarilyDisabled)
             }
 
             // Divider line
@@ -189,7 +205,7 @@ struct ContentView: View {
                 .padding(.horizontal, -20)
 
             ZStack {
-                if isSaving {
+                if isSaveInProgress {
                     ProgressView(value: viewModel.progress) {
                         Text("Saving... \(Int(viewModel.progress * 100))%")
                     }
@@ -200,6 +216,10 @@ struct ContentView: View {
                         case .idle:
                             Text("idle")
                                 .foregroundColor(.gray)
+                        case .saving:
+                            Image("custom.waveform.badge.arrow.down")
+                                .foregroundColor(.white)
+                                .font(.system(size: 24))
                         case .success:
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.green)
@@ -207,6 +227,10 @@ struct ContentView: View {
                         case .failure:
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundColor(.red)
+                                .font(.system(size: 24))
+                        case .previewing:
+                            Image(systemName: "speaker.wave.2.bubble")
+                                .foregroundColor(.orange)
                                 .font(.system(size: 24))
                         }
                     }
@@ -241,13 +265,13 @@ struct ContentView: View {
             if response == .OK, let url = savePanel.url {
                 Task {
                     do {
-                        isSaving = true
-                        saveStatus = .idle
+                        isSaveInProgress = true
+                        saveStatus = .saving
                         try await viewModel.startRecording(to: url)
                         _ = try await viewModel.speakAndSave(
                             inputText, voice: selectedVoice)
                         try await viewModel.stopRecording()
-                        isSaving = false
+                        isSaveInProgress = false
                         saveStatus = .success
                         statusOpacity = 1.0
 
@@ -263,7 +287,7 @@ struct ContentView: View {
                         }
                     } catch {
                         LogManager.shared.addLog("Error occurred: \(error)")
-                        isSaving = false
+                        isSaveInProgress = false
                         saveStatus = .failure
                         statusOpacity = 1.0
 
@@ -284,12 +308,46 @@ struct ContentView: View {
     }
 
     private func generateDefaultFilename(from text: String) -> String {
-        let latinizedText =
-            text.applyingTransform(.toLatin, reverse: false) ?? text
-        let underscored = latinizedText.replacingOccurrences(of: " ", with: "_")
-        let cleanedText = underscored.components(
-            separatedBy: CharacterSet.letters.inverted
-        ).joined()
-        return underscored.isEmpty ? "speech.wav" : "\(underscored).wav"
+        // Step 1: Normalize the string to remove diacritics
+        let normalized = text.folding(
+            options: .diacriticInsensitive, locale: .current)
+
+        // Step 2: Convert to lowercase and replace non-alphanumeric characters with underscores
+        let alphanumeric = CharacterSet.alphanumerics
+        var cleanedText = ""
+        var needsUnderscore = false
+
+        for scalar in normalized.lowercased().unicodeScalars {
+            if alphanumeric.contains(scalar) {
+                if needsUnderscore {
+                    cleanedText += "_"
+                    needsUnderscore = false
+                }
+                cleanedText.unicodeScalars.append(scalar)
+            } else if scalar.properties.isEmoji {
+                if needsUnderscore {
+                    cleanedText += "_"
+                }
+                cleanedText +=
+                    scalar.properties.name?.lowercased().replacingOccurrences(
+                        of: " ", with: "_") ?? ""
+                needsUnderscore = true
+            } else {
+                needsUnderscore = true
+            }
+        }
+
+        // Step 3: Remove leading/trailing underscores and collapse multiple underscores
+        cleanedText = cleanedText.trimmingCharacters(
+            in: CharacterSet(charactersIn: "_"))
+        while cleanedText.contains("__") {
+            cleanedText = cleanedText.replacingOccurrences(of: "__", with: "_")
+        }
+
+        // Step 4: Truncate if the filename is too long (leaving room for .wav extension)
+        let maxLength = 255 - 4  // Maximum filename length minus .wav
+        let truncatedText = cleanedText.prefix(maxLength)
+
+        return truncatedText.isEmpty ? "speech.wav" : "\(truncatedText).wav"
     }
 }
