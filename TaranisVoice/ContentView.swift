@@ -72,6 +72,9 @@ struct ContentView: View {
     @State private var doneOpacity: Double = 1.0
     @State private var selectedSampleRate: SampleRate = .default
     @EnvironmentObject private var logManager: LogManager
+    @Environment(\.logWindowVisibility) private var logWindowVisibility
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     init() {
         let voices = AVSpeechSynthesisVoice.speechVoices()
@@ -200,6 +203,13 @@ struct ContentView: View {
         }
         .padding()
         .frame(width: 400)
+        .onChange(of: logWindowVisibility.isVisible) { oldValue, newValue in
+            if newValue {
+                openWindow(id: "logWindow")
+            } else {
+                dismissWindow(id: "logWindow")
+            }
+        }
     }
 
     private func showSaveDialog() {

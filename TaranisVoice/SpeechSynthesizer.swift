@@ -116,14 +116,15 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             LogManager.shared.addLog("No accumulated buffer to save")
             return
         }
-                                     LogManager.shared.addLog("Output URL: \(String(describing: outputURL))")
-                                                              LogManager.shared.addLog("Buffer format before resampling: \(accumulatedBuffer.format)")
+        LogManager.shared.addLog("Output URL: \(String(describing: outputURL))")
+        LogManager.shared.addLog(
+            "Buffer format before resampling: \(accumulatedBuffer.format)")
 
         // Resample the accumulated buffer to the selected sample rate
         let resampledBuffer = resample(
             buffer: accumulatedBuffer,
             toSampleRate: Double(selectedSampleRate.rawValue))
-                                                                                       LogManager.shared.addLog(
+        LogManager.shared.addLog(
             "Buffer format before changing bit depth: \(resampledBuffer.format)"
         )
 
@@ -138,7 +139,7 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 AVLinearPCMIsNonInterleaved: false,
             ]
 
-                LogManager.shared.addLog("Settings: \(settings)")
+            LogManager.shared.addLog("Settings: \(settings)")
 
             // Create the AVAudioFile with the settings
             let audioFile = try AVAudioFile(
@@ -146,13 +147,13 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
             // Ensure the buffer frame length is not zero before writing
             guard resampledBuffer.frameLength > 0 else {
-                    LogManager.shared.addLog("Buffer has no frames to write")
+                LogManager.shared.addLog("Buffer has no frames to write")
                 return
             }
 
             // Ensure the buffer formats are equivalent
             guard audioFile.processingFormat == resampledBuffer.format else {
-                        LogManager.shared.addLog(
+                LogManager.shared.addLog(
                     "Format mismatch: file \(audioFile.processingFormat) vs resampledBuffer \(resampledBuffer.format)"
                 )
                 return
@@ -161,23 +162,27 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             // ensure the file is writable
             guard FileManager.default.isWritableFile(atPath: outputURL!.path)
             else {
-                            LogManager.shared.addLog("The file path: '\(outputURL!.path)' is not writable.")
+                LogManager.shared.addLog(
+                    "The file path: '\(outputURL!.path)' is not writable.")
                 return
             }
 
             // Attempt to write the buffer to the file
-                                                     LogManager.shared.addLog("Attempting to write the buffer to file...")
+            LogManager.shared.addLog(
+                "Attempting to write the buffer to file...")
             try audioFile.write(from: resampledBuffer)
-                                                                              LogManager.shared.addLog("Audio saved successfully.")
+            LogManager.shared.addLog("Audio saved successfully.")
 
             // Log file format after writing
-                                                                                                       LogManager.shared.addLog("Audio file format after writing: \(audioFile.fileFormat)")
+            LogManager.shared.addLog(
+                "Audio file format after writing: \(audioFile.fileFormat)")
         } catch {
             let nsError = error as NSError
-                                LogManager.shared.addLog("Error writing to audio file: \(nsError)")
-                                                         LogManager.shared.addLog(
+            LogManager.shared.addLog("Error writing to audio file: \(nsError)")
+            LogManager.shared.addLog(
                 "Error localized description: \(nsError.localizedDescription)")
-                                                                                  LogManager.shared.addLog("AVAudioFile error details: \(nsError.userInfo)")
+            LogManager.shared.addLog(
+                "AVAudioFile error details: \(nsError.userInfo)")
         }
 
         isRecording = false
@@ -208,7 +213,7 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 pcmFormat: outputFormat,
                 frameCapacity: estimatedOutputFrameCount)
         else {
-                LogManager.shared.addLog("Failed to create output buffer")
+            LogManager.shared.addLog("Failed to create output buffer")
             return buffer
         }
 
@@ -225,7 +230,7 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
 
         if let error = error {
-                    LogManager.shared.addLog("Error during conversion: \(error)")
+            LogManager.shared.addLog("Error during conversion: \(error)")
             return buffer
         }
 

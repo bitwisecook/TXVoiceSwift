@@ -20,8 +20,22 @@ class LogManager: ObservableObject {
     }
 }
 
+struct LogWindowVisibilityKey: EnvironmentKey {
+    static let defaultValue: (Bool, (Bool) -> Void) = (false, { _ in })
+}
+
+extension EnvironmentValues {
+    var logWindowVisibility: (isVisible: Bool, update: (Bool) -> Void) {
+        get { self[LogWindowVisibilityKey.self] }
+        set { self[LogWindowVisibilityKey.self] = newValue }
+    }
+}
+
 struct LogView: View {
     @EnvironmentObject var logManager: LogManager
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.logWindowVisibility) private var logWindowVisibility
+
     @State private var showCopiedAlert = false
 
     var body: some View {
@@ -42,16 +56,17 @@ struct LogView: View {
             Text("All logs have been copied to the clipboard.")
         }
         HStack {
+            Spacer()
             Button("Copy Logs") {
                 copyLogs()
             }
             .keyboardShortcut("C", modifiers: [.command, .shift])
-            .padding()
-
-            Spacer()
 
             Button("Close") {
-                NSApp.keyWindow?.close()
+                dismiss()
+                DispatchQueue.main.async {
+                    logWindowVisibility.update(false)
+                }
             }
             .keyboardShortcut(.escape, modifiers: [])
             .padding()
