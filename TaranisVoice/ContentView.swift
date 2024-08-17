@@ -1,6 +1,12 @@
 import AVFoundation
 import SwiftUI
 
+enum SaveStatus {
+    case idle
+    case success
+    case failure
+}
+
 enum SampleRate: Int, CaseIterable, Identifiable {
     case rate8kHz = 8000
     case rate16kHz = 16000
@@ -44,10 +50,10 @@ class SpeechSynthesizerViewModel: ObservableObject {
         return await synthesizer.speak(text, voice: voice)
     }
 
-    func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice) async
-        -> Bool
+    func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice)
+        async throws -> Bool
     {
-        return await synthesizer.speakAndSave(text, voice: voice)
+        return try await synthesizer.speakAndSave(text, voice: voice)
     }
 
     func startRecording(to url: URL) async throws {
@@ -55,8 +61,8 @@ class SpeechSynthesizerViewModel: ObservableObject {
         isRecording = await synthesizer.isRecording
     }
 
-    func stopRecording() async {
-        await synthesizer.stopRecording()
+    func stopRecording() async throws {
+        try await synthesizer.stopRecording()
         isRecording = await synthesizer.isRecording
     }
 }
@@ -71,6 +77,8 @@ struct ContentView: View {
     @State private var showDoneMessage = false
     @State private var doneOpacity: Double = 1.0
     @State private var selectedSampleRate: SampleRate = .default
+    @State private var saveStatus: SaveStatus = .idle
+    @State private var statusOpacity: Double = 1.0
     @EnvironmentObject private var logManager: LogManager
     @Environment(\.logWindowVisibility) private var logWindowVisibility
     @Environment(\.openWindow) private var openWindow
@@ -186,16 +194,23 @@ struct ContentView: View {
                         Text("Saving... \(Int(viewModel.progress * 100))%")
                     }
                     .progressViewStyle(LinearProgressViewStyle())
-                } else if showDoneMessage {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.system(size: 24))
-                        .bold()
-                        .opacity(doneOpacity)
                 } else {
-                    Text("idle")
-                        .foregroundColor(
-                            .init(hue: 1.0, saturation: 0.0, brightness: 0.3))
+                    Group {
+                        switch saveStatus {
+                        case .idle:
+                            Text("idle")
+                                .foregroundColor(.gray)
+                        case .success:
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 24))
+                        case .failure:
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                                .font(.system(size: 24))
+                        }
+                    }
+                    .opacity(statusOpacity)
                 }
             }
             .frame(height: 30)
@@ -227,34 +242,41 @@ struct ContentView: View {
                 Task {
                     do {
                         isSaving = true
+                        saveStatus = .idle
                         try await viewModel.startRecording(to: url)
-                        _ = await viewModel.speakAndSave(
+                        _ = try await viewModel.speakAndSave(
                             inputText, voice: selectedVoice)
-                        await viewModel.stopRecording()
+                        try await viewModel.stopRecording()
                         isSaving = false
-                        isTemporarilyDisabled = true
-                        showDoneMessage = true
+                        saveStatus = .success
+                        statusOpacity = 1.0
 
-                        // Re-enable buttons after 500ms
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            isTemporarilyDisabled = false
+                        // Show success status for 2 seconds
+                        withAnimation(.easeInOut(duration: 0.5).delay(2)) {
+                            statusOpacity = 0
                         }
 
-                        // Fade out "Done" message after 2 seconds
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                            withAnimation(.easeOut(duration: 1)) {
-                                doneOpacity = 0
-                            }
-                        }
-
-                        // Hide "Done" message after fade-out
+                        // Reset to idle after fading out
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                            showDoneMessage = false
-                            doneOpacity = 1
+                            saveStatus = .idle
+                            statusOpacity = 1.0
                         }
                     } catch {
-                        print("Failed to record: \(error)")
+                        LogManager.shared.addLog("Error occurred: \(error)")
                         isSaving = false
+                        saveStatus = .failure
+                        statusOpacity = 1.0
+
+                        // Show failure status for 5 seconds
+                        withAnimation(.easeInOut(duration: 0.5).delay(5)) {
+                            statusOpacity = 0
+                        }
+
+                        // Reset to idle after fading out
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 5.5) {
+                            saveStatus = .idle
+                            statusOpacity = 1.0
+                        }
                     }
                 }
             }
@@ -264,10 +286,10 @@ struct ContentView: View {
     private func generateDefaultFilename(from text: String) -> String {
         let latinizedText =
             text.applyingTransform(.toLatin, reverse: false) ?? text
-        let cleanedText = latinizedText.components(
+        let underscored = latinizedText.replacingOccurrences(of: " ", with: "_")
+        let cleanedText = underscored.components(
             separatedBy: CharacterSet.letters.inverted
         ).joined()
-        let underscored = cleanedText.replacingOccurrences(of: " ", with: "_")
         return underscored.isEmpty ? "speech.wav" : "\(underscored).wav"
     }
 }
