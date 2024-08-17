@@ -64,14 +64,23 @@ struct VoicePickerView: View {
                                 if voice == selection {
                                     ColoredSFSymbol(
                                         systemName: "checkmark",
-                                        color: .accentColor)
+                                        color: .accentColor
+                                    )
+                                } else if voice.quality == .premium {
+                                    ColoredSFSymbol(
+                                        systemName: "waveform.badge.plus",
+                                        color: Color("VoiceMenuPremiumColor")
+                                    )
                                 } else if voice.quality == .enhanced {
                                     ColoredSFSymbol(
                                         systemName: "waveform.badge.plus",
-                                        color: .yellow)
+                                        color: Color("VoiceMenuEnhancedColor")
+                                    )
                                 } else {
                                     ColoredSFSymbol(
-                                        systemName: "waveform", color: .gray)
+                                        systemName: "waveform",
+                                        color: Color("VoiceMenuStandardColor")
+                                    )
                                 }
                             }
                         }
@@ -283,10 +292,10 @@ struct ContentView: View {
                         switch saveStatus {
                         case .idle:
                             Text("idle")
-                                .foregroundColor(.gray)
+                                .foregroundColor(Color("MainStatusIdleColor"))
                         case .saving:
                             Image("custom.waveform.badge.arrow.down")
-                                .foregroundColor(.white)
+                                .foregroundColor(Color("MainStatusSavingColor"))
                                 .font(.system(size: 24))
                         case .success:
                             Image(systemName: "checkmark.circle.fill")
@@ -353,10 +362,8 @@ struct ContentView: View {
                 $0.language == "\(currentLanguageCode)-\(currentRegion)"
             }
             let sortedVoices = value.sorted { v1, v2 in
-                if v1.quality == .enhanced && v2.quality != .enhanced {
-                    return true
-                } else if v1.quality != .enhanced && v2.quality == .enhanced {
-                    return false
+                if v1.quality != v2.quality {
+                    return v1.quality.rawValue > v2.quality.rawValue
                 } else {
                     return v1.name < v2.name
                 }
