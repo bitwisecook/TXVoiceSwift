@@ -27,6 +27,69 @@ enum SampleRate: Int, CaseIterable, Identifiable {
     static var `default`: SampleRate { .rate32kHz }
 }
 
+struct VoiceGroup: Identifiable {
+    let id = UUID()
+    let name: String
+    var voices: [AVSpeechSynthesisVoice]
+    let isNovelty: Bool
+    let isPrimaryLanguage: Bool
+}
+
+struct ColoredSFSymbol: View {
+    let systemName: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: systemName)
+            .foregroundColor(color)
+            .symbolRenderingMode(.palette)
+    }
+}
+
+struct VoicePickerView: View {
+    @Binding var selection: AVSpeechSynthesisVoice
+    let voiceGroups: [VoiceGroup]
+
+    var body: some View {
+        Menu {
+            ForEach(voiceGroups) { group in
+                Section(header: Text(group.name).foregroundColor(.secondary)) {
+                    ForEach(group.voices, id: \.identifier) { voice in
+                        Button(action: {
+                            selection = voice
+                        }) {
+                            HStack {
+                                Text(voice.name)
+                                Spacer()
+                                if voice == selection {
+                                    ColoredSFSymbol(
+                                        systemName: "checkmark",
+                                        color: .accentColor)
+                                } else if voice.quality == .enhanced {
+                                    ColoredSFSymbol(
+                                        systemName: "waveform.badge.plus",
+                                        color: .yellow)
+                                } else {
+                                    ColoredSFSymbol(
+                                        systemName: "waveform", color: .gray)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack {
+                Text(selection.name)
+                if selection.quality == .enhanced {
+                    ColoredSFSymbol(
+                        systemName: "waveform.badge.plus", color: .yellow)
+                }
+            }
+        }
+    }
+}
+
 @MainActor
 class SpeechSynthesizerViewModel: ObservableObject {
     @Published var isPreviewInProgress = false
@@ -75,6 +138,7 @@ class SpeechSynthesizerViewModel: ObservableObject {
 struct ContentView: View {
     @State private var inputText: String = "Terrain, pull up!"
     @State private var selectedVoice: AVSpeechSynthesisVoice
+    @State private var groupedVoices: [VoiceGroup] = []
     @State private var availableVoices: [AVSpeechSynthesisVoice] = []
     @StateObject private var viewModel = SpeechSynthesizerViewModel()
     @State private var isSaveInProgress = false
@@ -91,7 +155,8 @@ struct ContentView: View {
 
     init() {
         let voices = AVSpeechSynthesisVoice.speechVoices()
-        _availableVoices = State(initialValue: voices)
+        _selectedVoice = State(initialValue: voices.first!)
+        _groupedVoices = State(initialValue: Self.groupVoices(voices))
 
         let savedVoiceIdentifier = UserDefaults.standard.string(
             forKey: "SelectedVoiceIdentifier")
@@ -132,9 +197,12 @@ struct ContentView: View {
                 .padding()
 
             // Voice to use
-            Picker("Select Voice", selection: $selectedVoice) {
-                ForEach(availableVoices, id: \.identifier) { voice in
-                    Text(voice.name).tag(voice)
+            VStack {
+                HStack {
+                    Text("Voice")
+                    Spacer()
+                    VoicePickerView(
+                        selection: $selectedVoice, voiceGroups: groupedVoices)
                 }
             }
             .pickerStyle(MenuPickerStyle())
@@ -251,6 +319,68 @@ struct ContentView: View {
         }
     }
 
+    private static func groupVoices(_ voices: [AVSpeechSynthesisVoice])
+        -> [VoiceGroup]
+    {
+        let currentLanguage = Locale.current.language
+        let currentLanguageCode =
+            currentLanguage.languageCode?.identifier ?? "en"
+        let currentRegion = currentLanguage.region?.identifier ?? ""
+
+        let noveltyVoices = [
+            "Albert", "Bad News", "Bahh", "Bells", "Boing", "Bubbles", "Cellos",
+            "Good News", "Jester", "Organ", "Trinoids", "Whisper", "Wobble",
+            "Zarvox",
+        ]
+
+        let filteredVoices = voices.filter { voice in
+            voice.language.hasPrefix(currentLanguageCode)
+                || noveltyVoices.contains(voice.name)
+        }
+
+        let groupedVoices = Dictionary(grouping: filteredVoices) {
+            voice -> String in
+            if noveltyVoices.contains(voice.name) {
+                return "Novelty"
+            } else {
+                return Locale.current.localizedString(
+                    forIdentifier: voice.language) ?? voice.language
+            }
+        }
+
+        let sortedGroups = groupedVoices.map { key, value in
+            let isPrimaryLanguage = value.contains {
+                $0.language == "\(currentLanguageCode)-\(currentRegion)"
+            }
+            let sortedVoices = value.sorted { v1, v2 in
+                if v1.quality == .enhanced && v2.quality != .enhanced {
+                    return true
+                } else if v1.quality != .enhanced && v2.quality == .enhanced {
+                    return false
+                } else {
+                    return v1.name < v2.name
+                }
+            }
+            return VoiceGroup(
+                name: key, voices: sortedVoices, isNovelty: key == "Novelty",
+                isPrimaryLanguage: isPrimaryLanguage)
+        }.sorted { group1, group2 in
+            if group1.isNovelty {
+                return false
+            } else if group2.isNovelty {
+                return true
+            } else if group1.isPrimaryLanguage {
+                return true
+            } else if group2.isPrimaryLanguage {
+                return false
+            } else {
+                return group1.name < group2.name
+            }
+        }
+
+        return sortedGroups
+    }
+
     private func showSaveDialog() {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.wav]
@@ -307,17 +437,25 @@ struct ContentView: View {
         }
     }
 
+    private func transliterate(_ input: String) -> String {
+        let mutableString = NSMutableString(string: input)
+        CFStringTransform(mutableString, nil, kCFStringTransformToLatin, false)
+        CFStringTransform(
+            mutableString, nil, kCFStringTransformStripDiacritics, false
+        )
+        return mutableString as String
+    }
+
     private func generateDefaultFilename(from text: String) -> String {
-        // Step 1: Normalize the string to remove diacritics
-        let normalized = text.folding(
-            options: .diacriticInsensitive, locale: .current)
+        // Step 1: Transliterate to Latin characters
+        let transliterated = transliterate(text)
 
         // Step 2: Convert to lowercase and replace non-alphanumeric characters with underscores
         let alphanumeric = CharacterSet.alphanumerics
         var cleanedText = ""
         var needsUnderscore = false
 
-        for scalar in normalized.lowercased().unicodeScalars {
+        for scalar in transliterated.lowercased().unicodeScalars {
             if alphanumeric.contains(scalar) {
                 if needsUnderscore {
                     cleanedText += "_"
