@@ -90,9 +90,16 @@ struct VoicePickerView: View {
         } label: {
             HStack {
                 Text(selection.name)
-                if selection.quality == .enhanced {
+                if selection.quality == .premium {
                     ColoredSFSymbol(
-                        systemName: "waveform.badge.plus", color: .yellow)
+                        systemName: "waveform.badge.plus",
+                        color: Color("VoiceMenuPremiumColor")
+                    )
+                } else if selection.quality == .enhanced {
+                    ColoredSFSymbol(
+                        systemName: "waveform.badge.plus",
+                        color: .yellow
+                    )
                 }
             }
         }
