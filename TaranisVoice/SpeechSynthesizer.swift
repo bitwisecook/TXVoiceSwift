@@ -29,6 +29,8 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     private var selectedSampleRate: SampleRate = .default
     private var currentUtteranceID: UUID?
     private var utteranceIDs: [ObjectIdentifier: UUID] = [:]
+    private var totalExpectedFrames: AVAudioFrameCount = 0
+    private var currentFrameCount: AVAudioFrameCount = 0
 
     override init() {
         self.synthesizer = AVSpeechSynthesizer()
@@ -103,6 +105,9 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         // Reset progress and buffer
         progress = 0.0
         accumulatedBuffer = nil
+        totalExpectedFrames = AVAudioFrameCount(
+            Double(utterance.speechString.count) * 220)  // Rough estimate
+        currentFrameCount = 0
 
         guard let outputURL = outputURL else {
             throw SpeechSynthesizerError.fileNotWritable
@@ -122,6 +127,7 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 Task {
                     do {
                         try await self.accumulateBuffer(buffer)
+                        self.updateBufferingProgress()
                     } catch {
                         continuation.resume(throwing: error)
                     }
@@ -145,6 +151,12 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             accumulatedBuffer = mergeBuffers(
                 buffer1: accumulatedBuffer!, buffer2: pcmBuffer)
         }
+    }
+
+    private func updateBufferingProgress() {
+        let newProgress = min(
+            Double(currentFrameCount) / Double(totalExpectedFrames), 1.0)
+        progress = newProgress * 0.5  // 50% of total progress
     }
 
     private func mergeBuffers(
@@ -231,12 +243,35 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
 
         LogManager.shared.addLog("Attempting to write the buffer to file...")
-        let audioData = convertToInt16Data(from: resampledBuffer)
-        try writeWavFile(
-            audioData: audioData, to: outputURL,
-            sampleRate: UInt32(selectedSampleRate.rawValue))
-        LogManager.shared.addLog("Audio saved successfully.")
+        try await writeBufferToDisk(
+            resampledBuffer, to: outputURL, settings: settings)
         isRecording = false
+        LogManager.shared.addLog("Audio saved successfully.")
+    }
+
+    private func writeBufferToDisk(
+        _ buffer: AVAudioPCMBuffer, to url: URL, settings: [String: Any]
+    ) async throws {
+        let totalFrames = Int(buffer.frameLength)
+        let chunkSize = 1024  // Adjust this value based on your needs
+
+        let audioData = convertToInt16Data(from: buffer)
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+            do {
+                try writeWavFile(
+                    audioData: audioData, to: url,
+                    sampleRate: UInt32(selectedSampleRate.rawValue)
+                ) { writtenBytes in
+                    let writingProgress =
+                        Double(writtenBytes) / Double(audioData.count)
+                    self.progress = 0.5 + (writingProgress * 0.5)  // 50% to 100%
+                }
+                continuation.resume()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
     func convertToInt16Data(from buffer: AVAudioPCMBuffer) -> Data {
@@ -257,14 +292,17 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         return int16Data
     }
 
-    func writeWavFile(audioData: Data, to url: URL, sampleRate: UInt32) throws {
+    func writeWavFile(
+        audioData: Data, to url: URL, sampleRate: UInt32,
+        progressHandler: @escaping (Int) -> Void
+    ) throws {
         let channelCount: UInt16 = 1
         let bitsPerSample: UInt16 = 16
         let byteRate = sampleRate * UInt32(channelCount * bitsPerSample / 8)
         let blockAlign = channelCount * bitsPerSample / 8
         let dataSize = UInt32(audioData.count)
         let fileSize = 36 + dataSize
-        
+
         var header = Data(capacity: 44)
         header.append(contentsOf: "RIFF".utf8)
         header.append(fileSize.littleEndian.data)
@@ -278,9 +316,24 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         header.append(bitsPerSample.littleEndian.data)
         header.append(contentsOf: "data".utf8)
         header.append(dataSize.littleEndian.data)
-        
-        let fileData = header + audioData
-        try fileData.write(to: url)
+
+        let fileHandle = try FileHandle(forWritingTo: url)
+        defer { fileHandle.closeFile() }
+
+        // Write header
+        fileHandle.write(header)
+        progressHandler(header.count)
+
+        // Write audio data in chunks
+        let chunkSize = 4096
+        var writtenBytes = header.count
+        for i in stride(from: 0, to: audioData.count, by: chunkSize) {
+            let upperBound = min(i + chunkSize, audioData.count)
+            let chunk = audioData[i..<upperBound]
+            fileHandle.write(chunk)
+            writtenBytes += chunk.count
+            progressHandler(writtenBytes)
+        }
     }
 
     private func resample(
