@@ -24,7 +24,7 @@ enum SampleRate: Int, CaseIterable, Identifiable {
         }
     }
 
-    static var `default`: SampleRate { .rate16kHz }
+    static var `default`: SampleRate { .rate32kHz }
 }
 
 struct VoiceGroup: Identifiable {
