@@ -22,9 +22,7 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     var audioFile: AVAudioFile?
     var accumulatedBuffer: AVAudioPCMBuffer?
 
-    @Published var isRecording = false
-    @Published var isPreviewing = false
-    @Published var progress: Double = 0.0
+    @Published var status: SaveStatus = .idle
     private var outputURL: URL?
     private var selectedSampleRate: SampleRate = .default
     private var currentUtteranceID: UUID?
@@ -50,18 +48,21 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         let utteranceObjectID = ObjectIdentifier(utterance)
         utteranceIDs[utteranceObjectID] = utteranceID
         currentUtteranceID = utteranceID
-        isPreviewing = true
+        currentUtteranceIdentifier = utteranceObjectID
+        status = .previewing
+
         return await withCheckedContinuation { continuation in
             synthesizer.speak(utterance)
             Task {
                 await waitForSpeechCompletion()
+                status = .idle
                 continuation.resume()
             }
         }
     }
 
     private func waitForSpeechCompletion() async {
-        while isPreviewing {
+        while status == .previewing {
             try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1 second
         }
     }
@@ -80,16 +81,19 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         guard utteranceIdentifier == currentUtteranceIdentifier else {
             return  // Ignore if it's not the current utterance
         }
-        isPreviewing = false
+        status = .success
         utteranceCompletion?.resume(returning: true)
         utteranceCompletion = nil
         currentUtteranceIdentifier = nil
+        LogManager.shared.addLog("Speech completed successfully")
     }
 
     private func handleSpeechError(_ error: Error) {
+        status = .failure
         utteranceCompletion?.resume(throwing: error)
         utteranceCompletion = nil
         currentUtteranceIdentifier = nil
+        LogManager.shared.addLog("Speech error occurred: \(error)")
     }
 
     private func createUtterance(text: String, voice: AVSpeechSynthesisVoice)
@@ -110,8 +114,6 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         let utterance = createUtterance(text: text, voice: voice)
         currentUtteranceIdentifier = ObjectIdentifier(utterance)
 
-        // Reset progress and buffer
-        progress = 0.0
         accumulatedBuffer = nil
         totalExpectedFrames = AVAudioFrameCount(
             Double(utterance.speechString.count) * 220)  // Rough estimate
@@ -130,7 +132,6 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 Task {
                     do {
                         try await self.accumulateBuffer(buffer)
-                        await self.updateBufferingProgress()
                     } catch {
                         await self.handleSpeechError(error)
                     }
@@ -148,7 +149,6 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
                 Task {
                     do {
                         try await self.accumulateBuffer(buffer)
-                        await self.updateBufferingProgress()
                     } catch {
                         continuation.resume(throwing: error)
                     }
@@ -176,12 +176,6 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         currentFrameCount += pcmBuffer.frameLength
     }
 
-    private func updateBufferingProgress() {
-        let newProgress = min(
-            Double(currentFrameCount) / Double(totalExpectedFrames), 1.0)
-        progress = newProgress * 0.5  // 50% of total progress
-    }
-
     private func mergeBuffers(
         buffer1: AVAudioPCMBuffer, buffer2: AVAudioPCMBuffer
     ) -> AVAudioPCMBuffer {
@@ -205,7 +199,7 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
     func startRecording(to url: URL) throws {
         outputURL = url
-        isRecording = true
+        status = .saving
     }
 
     func stopRecording() async throws {
@@ -266,28 +260,28 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
 
         LogManager.shared.addLog("Attempting to write the buffer to file...")
-        try await writeBufferToDisk(
-            resampledBuffer, to: outputURL, settings: settings)
-        isRecording = false
-        LogManager.shared.addLog("Audio saved successfully.")
+        do {
+            try await writeBufferToDisk(
+                resampledBuffer, to: outputURL, settings: settings)
+            status = .success
+            LogManager.shared.addLog("Audio saved successfully.")
+        } catch {
+            status = .failure
+            LogManager.shared.addLog("Failed to save audio: \(error)")
+            throw error
+        }
     }
 
     private func writeBufferToDisk(
         _ buffer: AVAudioPCMBuffer, to url: URL, settings: [String: Any]
     ) async throws {
         let audioData = convertToInt16Data(from: buffer)
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
+        return try await withCheckedThrowingContinuation { continuation in
             do {
                 try writeWavFile(
                     audioData: audioData, to: url,
-                    sampleRate: UInt32(selectedSampleRate.rawValue)
-                ) { writtenBytes in
-                    let writingProgress =
-                        Double(writtenBytes) / Double(audioData.count)
-                    self.progress = 0.5 + (writingProgress * 0.5)  // 50% to 100%
-                }
-                continuation.resume()
+                    sampleRate: UInt32(selectedSampleRate.rawValue))
+                continuation.resume(returning: ())
             } catch {
                 continuation.resume(throwing: error)
             }
@@ -313,8 +307,7 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
     }
 
     func writeWavFile(
-        audioData: Data, to url: URL, sampleRate: UInt32,
-        progressHandler: @escaping (Int) -> Void
+        audioData: Data, to url: URL, sampleRate: UInt32
     ) throws {
         let channelCount: UInt16 = 1
         let bitsPerSample: UInt16 = 16
@@ -342,7 +335,6 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
 
         // Write header
         fileHandle.write(header)
-        progressHandler(header.count)
 
         // Write audio data in chunks
         let chunkSize = 4096
@@ -352,7 +344,6 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
             let chunk = audioData[i..<upperBound]
             fileHandle.write(chunk)
             writtenBytes += chunk.count
-            progressHandler(writtenBytes)
         }
     }
 

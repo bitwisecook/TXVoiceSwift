@@ -108,10 +108,9 @@ struct VoicePickerView: View {
 
 @MainActor
 class SpeechSynthesizerViewModel: ObservableObject {
-    @Published var isPreviewInProgress = false
-    @Published var isRecording = false
-    @Published var progress: Double = 0.0
+    @Published var status: SaveStatus = .idle
     @Published var selectedSampleRate: SampleRate = .default
+    var outputURL: URL?
     private let synthesizer: SpeechSynthesizer
 
     func setSampleRate(_ sampleRate: SampleRate) async {
@@ -121,33 +120,34 @@ class SpeechSynthesizerViewModel: ObservableObject {
 
     init() {
         synthesizer = SpeechSynthesizer()
-        Task {
-            for await newProgress in await synthesizer.$progress.values {
-                self.progress = newProgress
-            }
-        }
     }
 
     func speak(_ text: String, voice: AVSpeechSynthesisVoice) async {
-        isPreviewInProgress = true
-        defer { isPreviewInProgress = false }
+        status = .previewing
+        defer { status = .idle }
         await synthesizer.speak(text, voice: voice)
     }
 
     func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice)
         async throws -> Bool
     {
-        return try await synthesizer.speakAndSave(text, voice: voice)
+        status = .saving
+        defer {
+            status = .idle
+        }
+        let result = try await synthesizer.speakAndSave(text, voice: voice)
+        status = result ? .success : .failure
+        return result
     }
 
     func startRecording(to url: URL) async throws {
         try await synthesizer.startRecording(to: url)
-        isRecording = await synthesizer.isRecording
+        status = await synthesizer.status
     }
 
     func stopRecording() async throws {
         try await synthesizer.stopRecording()
-        isRecording = await synthesizer.isRecording
+        status = await synthesizer.status
     }
 }
 
@@ -157,13 +157,12 @@ struct ContentView: View {
     @State private var groupedVoices: [VoiceGroup] = []
     @State private var availableVoices: [AVSpeechSynthesisVoice] = []
     @StateObject private var viewModel = SpeechSynthesizerViewModel()
-    @State private var isSaveInProgress = false
-    @State private var isTemporarilyDisabled = false
     @State private var showDoneMessage = false
     @State private var doneOpacity: Double = 1.0
     @State private var selectedSampleRate: SampleRate = .default
-    @State private var saveStatus: SaveStatus = .idle
     @State private var statusOpacity: Double = 1.0
+    @State private var isAnimating: Bool = false
+    @State private var animationTimer: Timer?
     @EnvironmentObject private var logManager: LogManager
     @Environment(\.logWindowVisibility) private var logWindowVisibility
     @Environment(\.openWindow) private var openWindow
@@ -195,7 +194,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 20) {
             // Image Logo
-            Image("TaranisVoiceLogo")  // Make sure to add this image to your asset catalog
+            Image("TaranisVoiceLogo")
                 .resizable()
                 .scaledToFit()
                 .frame(height: 120)
@@ -260,26 +259,17 @@ struct ContentView: View {
             HStack {
                 Button("Preview") {
                     Task {
-                        saveStatus = .previewing
-                        await viewModel.speak(inputText, voice: selectedVoice)
-                        saveStatus = .idle
+                        await preview()
                     }
                 }
-                .disabled(
-                    isSaveInProgress
-                        || viewModel.isPreviewInProgress
-                        || isTemporarilyDisabled)
+                .disabled(viewModel.status != .idle)
 
                 Button("Save to .wav") {
                     Task {
-                        saveStatus = .saving
-                        showSaveDialog()
+                        await saveToWav()
                     }
                 }
-                .disabled(
-                    isSaveInProgress
-                        || viewModel.isPreviewInProgress
-                        || isTemporarilyDisabled)
+                .disabled(viewModel.status != .idle)
             }
 
             // Divider line
@@ -288,38 +278,32 @@ struct ContentView: View {
                 .frame(height: 1)
                 .padding(.horizontal, -20)
 
+            // Status
             ZStack {
-                if isSaveInProgress {
-                    ProgressView(value: viewModel.progress) {
-                        Text("Saving... \(Int(viewModel.progress * 100))%")
+                Group {
+                    switch viewModel.status {
+                    case .idle:
+                        Text("idle")
+                            .foregroundColor(Color("MainStatusIdleColor"))
+                    case .saving:
+                        Image("custom.waveform.badge.arrow.down")
+                            .foregroundColor(Color("MainStatusSavingColor"))
+                            .font(.system(size: 24))
+                    case .success:
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(size: 24))
+                    case .failure:
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.red)
+                            .font(.system(size: 24))
+                    case .previewing:
+                        Image(systemName: "speaker.wave.2.bubble")
+                            .foregroundColor(.orange)
+                            .font(.system(size: 24))
                     }
-                    .progressViewStyle(LinearProgressViewStyle())
-                } else {
-                    Group {
-                        switch saveStatus {
-                        case .idle:
-                            Text("idle")
-                                .foregroundColor(Color("MainStatusIdleColor"))
-                        case .saving:
-                            Image("custom.waveform.badge.arrow.down")
-                                .foregroundColor(Color("MainStatusSavingColor"))
-                                .font(.system(size: 24))
-                        case .success:
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                                .font(.system(size: 24))
-                        case .failure:
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.red)
-                                .font(.system(size: 24))
-                        case .previewing:
-                            Image(systemName: "speaker.wave.2.bubble")
-                                .foregroundColor(.orange)
-                                .font(.system(size: 24))
-                        }
-                    }
-                    .opacity(statusOpacity)
                 }
+                .opacity(statusOpacity)
             }
             .frame(height: 30)
             .padding(.vertical, 10)
@@ -332,6 +316,11 @@ struct ContentView: View {
             } else {
                 dismissWindow(id: "logWindow")
             }
+        }
+        .onChange(of: viewModel.status) { oldStatus, newStatus in
+            LogManager.shared.addLog(
+                "Status changed from \(oldStatus) to \(newStatus)")
+            animateStatusChange(newStatus)
         }
     }
 
@@ -395,7 +384,72 @@ struct ContentView: View {
         return sortedGroups
     }
 
-    private func showSaveDialog() {
+    private func preview() async {
+        viewModel.status = .previewing
+        await viewModel.speak(inputText, voice: selectedVoice)
+        viewModel.status = .idle
+    }
+
+    private func saveToWav() async {
+        LogManager.shared.addLog("Starting saveToWav operation")
+        do {
+            if try await showSaveDialog() {
+                LogManager.shared.addLog("Save dialog confirmed")
+                try await performSaveOperation()
+                LogManager.shared.addLog(
+                    "Save operation completed successfully")
+            } else {
+                LogManager.shared.addLog("Save dialog cancelled")
+                viewModel.status = .idle
+            }
+        } catch {
+            LogManager.shared.addLog("Error saving WAV: \(error)")
+            viewModel.status = .failure
+        }
+    }
+
+    private func animateStatusChange(_ newStatus: SaveStatus) {
+        withAnimation(.easeInOut(duration: 0.3)) {
+            statusOpacity = 1.0
+        }
+
+        switch newStatus {
+        case .success:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    self.statusOpacity = 0
+                }
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                self.viewModel.status = .idle
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    self.statusOpacity = 1.0
+                }
+            }
+        case .failure:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    self.statusOpacity = 0
+                }
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                self.viewModel.status = .idle
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    self.statusOpacity = 1.0
+                }
+            }
+        case .idle:
+            do {}
+        case .previewing:
+            do {}
+        case .saving:
+            do {}
+        }
+    }
+
+    private func showSaveDialog() async throws -> Bool {
         let savePanel = NSSavePanel()
         savePanel.allowedContentTypes = [.wav]
         savePanel.canCreateDirectories = true
@@ -405,50 +459,27 @@ struct ContentView: View {
         savePanel.nameFieldStringValue = generateDefaultFilename(
             from: inputText)
 
-        savePanel.beginSheetModal(for: NSApp.keyWindow!) { response in
-            if response == .OK, let url = savePanel.url {
-                Task {
-                    do {
-                        isSaveInProgress = true
-                        saveStatus = .saving
-                        try await viewModel.startRecording(to: url)
-                        _ = try await viewModel.speakAndSave(
-                            inputText, voice: selectedVoice)
-                        try await viewModel.stopRecording()
-                        isSaveInProgress = false
-                        saveStatus = .success
-                        statusOpacity = 1.0
+        let response = await savePanel.beginSheetModal(for: NSApp.keyWindow!)
 
-                        // Show success status for 2 seconds
-                        withAnimation(.easeInOut(duration: 0.5).delay(2)) {
-                            statusOpacity = 0
-                        }
-
-                        // Reset to idle after fading out
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                            saveStatus = .idle
-                            statusOpacity = 1.0
-                        }
-                    } catch {
-                        LogManager.shared.addLog("Error occurred: \(error)")
-                        isSaveInProgress = false
-                        saveStatus = .failure
-                        statusOpacity = 1.0
-
-                        // Show failure status for 5 seconds
-                        withAnimation(.easeInOut(duration: 0.5).delay(5)) {
-                            statusOpacity = 0
-                        }
-
-                        // Reset to idle after fading out
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 5.5) {
-                            saveStatus = .idle
-                            statusOpacity = 1.0
-                        }
-                    }
-                }
-            }
+        if response == .OK, let url = savePanel.url {
+            viewModel.outputURL = url
+            return true
+        } else {
+            return false
         }
+    }
+
+    private func performSaveOperation() async throws {
+        LogManager.shared.addLog("Performing save operation")
+        guard let url = viewModel.outputURL else {
+            throw SpeechSynthesizerError.fileNotWritable
+        }
+
+        try await viewModel.startRecording(to: url)
+        _ = try await viewModel.speakAndSave(inputText, voice: selectedVoice)
+        try await viewModel.stopRecording()
+        LogManager.shared.addLog("Save operation completed")
+        viewModel.status = .success
     }
 
     private func transliterate(_ input: String) -> String {
