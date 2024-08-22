@@ -12,11 +12,12 @@ enum SpeechSynthesizerError: Error {
 
 actor SpeechSynthesizer: ObservableObject {
     private var synthesizer = AVSpeechSynthesizer()
-    private var accumulatedBuffer: AVAudioPCMBuffer?
-    private var outputURL: URL?
     private var selectedSampleRate: Double = 32000
-    private var utteranceCompletion: CheckedContinuation<Void, Error>?
     private let delegate: SpeechSynthesizerDelegate
+
+    // Constants for buffer management
+    private let initialBufferSeconds: Double = 30  // Initial buffer size in seconds
+    private let bufferGrowthFactor: Double = 1.5  // Factor to grow buffer when needed
 
     init() {
         let tempSynthesizer = AVSpeechSynthesizer()
@@ -37,9 +38,12 @@ actor SpeechSynthesizer: ObservableObject {
         utterance.voice = voice
 
         return try await withCheckedThrowingContinuation { continuation in
-            self.utteranceCompletion = continuation
-            delegate.onUtteranceComplete = { [weak self] error in
-                Task { await self?.completeUtterance(with: error) }
+            delegate.onUtteranceComplete = { error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
             }
             synthesizer.speak(utterance)
         }
@@ -55,21 +59,37 @@ actor SpeechSynthesizer: ObservableObject {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = voice
 
-        let audioEngine = AVAudioEngine()
-        let playerNode = AVAudioPlayerNode()
-        audioEngine.attach(playerNode)
-
         let format = AVAudioFormat(
             standardFormatWithSampleRate: selectedSampleRate, channels: 1)!
-        audioEngine.connect(
-            playerNode, to: audioEngine.mainMixerNode, format: format)
 
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        // Preallocate the buffer
+        let initialFrameCapacity = AVAudioFrameCount(
+            initialBufferSeconds * selectedSampleRate)
+        guard
+            let initialBuffer = AVAudioPCMBuffer(
+                pcmFormat: format, frameCapacity: initialFrameCapacity)
+        else {
+            throw SpeechSynthesizerError.noPCMBuffer
+        }
+        var accumulatedBuffer = initialBuffer
+        var currentFrame: AVAudioFrameCount = 0
 
         return try await withCheckedThrowingContinuation { continuation in
-            self.utteranceCompletion = continuation
             delegate.onUtteranceComplete = { [weak self] error in
-                Task { await self?.completeUtterance(with: error) }
+                guard let self = self else { return }
+                LogManager.shared.addLog(
+                    "Speech synthesis completed, frames accumulated: \(currentFrame)"
+                )
+
+                Task {
+                    do {
+                        try await self.writeToFile(
+                            buffer: accumulatedBuffer, url: url)
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
 
             synthesizer.write(utterance) { buffer in
@@ -88,25 +108,79 @@ actor SpeechSynthesizer: ObservableObject {
                     convertedBuffer = pcmBuffer
                 }
 
-                do {
-                    try file.write(from: convertedBuffer)
-                    LogManager.shared.addLog(
-                        "Wrote \(convertedBuffer.frameLength) frames to file")
-                } catch {
-                    LogManager.shared.addLog("Error writing to file: \(error)")
-                    continuation.resume(throwing: error)
-                }
-            }
+                let framesToAdd = convertedBuffer.frameLength
+                let totalRequiredFrames = currentFrame + framesToAdd
 
-            do {
-                try audioEngine.start()
-                LogManager.shared.addLog("Audio engine started")
-            } catch {
+                if totalRequiredFrames > accumulatedBuffer.frameCapacity {
+                    // Need to extend the buffer
+                    let newCapacity = AVAudioFrameCount(
+                        Double(accumulatedBuffer.frameCapacity)
+                            * self.bufferGrowthFactor)
+                    guard
+                        let newBuffer = self.extendBuffer(
+                            accumulatedBuffer, newCapacity: newCapacity)
+                    else {
+                        LogManager.shared.addLog("Failed to extend buffer")
+                        return
+                    }
+                    accumulatedBuffer = newBuffer
+                }
+
+                // Copy new frames into the accumulated buffer
+                let targetBuffer = accumulatedBuffer.floatChannelData![0]
+                    .advanced(by: Int(currentFrame))
+                convertedBuffer.floatChannelData![0].withMemoryRebound(
+                    to: Float.self, capacity: Int(framesToAdd)
+                ) { sourceBuffer in
+                    targetBuffer.initialize(
+                        from: sourceBuffer, count: Int(framesToAdd))
+                }
+
+                currentFrame += framesToAdd
+                accumulatedBuffer.frameLength = currentFrame
                 LogManager.shared.addLog(
-                    "Error starting audio engine: \(error)")
-                continuation.resume(throwing: error)
+                    "Accumulated \(framesToAdd) frames, total: \(currentFrame)")
             }
         }
+    }
+
+    private func writeToFile(buffer: AVAudioPCMBuffer, url: URL) async throws {
+        if buffer.frameLength > 0 {
+            do {
+                LogManager.shared.addLog("Starting to write audio file...")
+                try await AudioFileManager.shared.writeBufferToDisk(
+                    buffer, to: url, sampleRate: self.selectedSampleRate)
+                LogManager.shared.addLog(
+                    "Audio file written successfully to \(url.path)")
+            } catch {
+                LogManager.shared.addLog("Error writing audio file: \(error)")
+                throw error
+            }
+        } else {
+            LogManager.shared.addLog("No audio data to write")
+            throw SpeechSynthesizerError.noAccumulatedBuffer
+        }
+    }
+
+    private func extendBuffer(
+        _ buffer: AVAudioPCMBuffer, newCapacity: AVAudioFrameCount
+    ) -> AVAudioPCMBuffer? {
+        guard
+            let newBuffer = AVAudioPCMBuffer(
+                pcmFormat: buffer.format, frameCapacity: newCapacity)
+        else {
+            return nil
+        }
+
+        let framesToCopy = min(buffer.frameLength, newCapacity)
+        let bytesToCopy = Int(framesToCopy) * MemoryLayout<Float>.size
+
+        memcpy(
+            newBuffer.floatChannelData?[0], buffer.floatChannelData?[0],
+            bytesToCopy)
+        newBuffer.frameLength = framesToCopy
+
+        return newBuffer
     }
 
     private func resample(
@@ -153,52 +227,6 @@ actor SpeechSynthesizer: ObservableObject {
         }
 
         return outputBuffer
-    }
-
-    private func writeBufferToWavFile(_ buffer: AVAudioPCMBuffer, to url: URL)
-        async throws
-    {
-        do {
-            let audioFile = try AVAudioFile(
-                forWriting: url, settings: buffer.format.settings)
-            try audioFile.write(from: buffer)
-        } catch {
-            LogManager.shared.addLog("Error writing audio file: \(error)")
-            throw SpeechSynthesizerError.audioWriteFailed
-        }
-    }
-
-    nonisolated func speechSynthesizer(
-        _ synthesizer: AVSpeechSynthesizer,
-        didFinish utterance: AVSpeechUtterance
-    ) {
-        Task { @MainActor in
-            LogManager.shared.addLog("Speech synthesis completed")
-            await self.completeUtterance()
-        }
-    }
-
-    nonisolated func speechSynthesizer(
-        _ synthesizer: AVSpeechSynthesizer,
-        didCancel utterance: AVSpeechUtterance
-    ) {
-        Task { @MainActor in
-            LogManager.shared.addLog("Speech synthesis cancelled")
-            await self.completeUtterance(
-                with: SpeechSynthesizerError.synthesisIncomplete)
-        }
-    }
-
-    private func completeUtterance(with error: Error? = nil) {
-        LogManager.shared.addLog("Completing utterance")
-        if let error = error {
-            LogManager.shared.addLog("Utterance completed with error: \(error)")
-            utteranceCompletion?.resume(throwing: error)
-        } else {
-            LogManager.shared.addLog("Utterance completed successfully")
-            utteranceCompletion?.resume()
-        }
-        utteranceCompletion = nil
     }
 }
 
