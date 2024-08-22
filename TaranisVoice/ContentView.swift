@@ -110,44 +110,47 @@ struct VoicePickerView: View {
 class SpeechSynthesizerViewModel: ObservableObject {
     @Published var status: SaveStatus = .idle
     @Published var selectedSampleRate: SampleRate = .default
-    var outputURL: URL?
     private let synthesizer: SpeechSynthesizer
-
-    func setSampleRate(_ sampleRate: SampleRate) async {
-        await synthesizer.setSampleRate(sampleRate)
-        selectedSampleRate = sampleRate
-    }
 
     init() {
         synthesizer = SpeechSynthesizer()
     }
 
+    func setSampleRate(_ sampleRate: SampleRate) async {
+        await synthesizer.setSampleRate(Double(sampleRate.rawValue))
+        selectedSampleRate = sampleRate
+    }
+
     func speak(_ text: String, voice: AVSpeechSynthesisVoice) async {
         status = .previewing
-        defer { status = .idle }
-        await synthesizer.speak(text, voice: voice)
-    }
-
-    func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice)
-        async throws -> Bool
-    {
-        status = .saving
-        defer {
+        LogManager.shared.addLog("Status changed to previewing")
+        do {
+            try await synthesizer.speak(text, voice: voice)
             status = .idle
+            LogManager.shared.addLog("Status changed to idle after preview")
+        } catch {
+            LogManager.shared.addLog("Error in speak: \(error)")
+            status = .failure
+            LogManager.shared.addLog(
+                "Status changed to failure after preview error")
         }
-        let result = try await synthesizer.speakAndSave(text, voice: voice)
-        status = result ? .success : .failure
-        return result
     }
 
-    func startRecording(to url: URL) async throws {
-        try await synthesizer.startRecording(to: url)
-        status = await synthesizer.status
-    }
-
-    func stopRecording() async throws {
-        try await synthesizer.stopRecording()
-        status = await synthesizer.status
+    func speakAndSave(
+        _ text: String, voice: AVSpeechSynthesisVoice, to url: URL
+    ) async {
+        status = .saving
+        LogManager.shared.addLog("Status changed to saving")
+        do {
+            try await synthesizer.speakAndSave(text, voice: voice, to: url)
+            status = .success
+            LogManager.shared.addLog("Status changed to success after save")
+        } catch {
+            LogManager.shared.addLog("Error in speakAndSave: \(error)")
+            status = .failure
+            LogManager.shared.addLog(
+                "Status changed to failure after save error")
+        }
     }
 }
 
@@ -385,26 +388,45 @@ struct ContentView: View {
     }
 
     private func preview() async {
-        viewModel.status = .previewing
         await viewModel.speak(inputText, voice: selectedVoice)
-        viewModel.status = .idle
     }
 
     private func saveToWav() async {
         LogManager.shared.addLog("Starting saveToWav operation")
-        do {
-            if try await showSaveDialog() {
-                LogManager.shared.addLog("Save dialog confirmed")
-                try await performSaveOperation()
+        if let url = await showSaveDialog() {
+            LogManager.shared.addLog("Save dialog confirmed")
+            await viewModel.speakAndSave(
+                inputText, voice: selectedVoice, to: url)
+            if viewModel.status == .success {
                 LogManager.shared.addLog(
                     "Save operation completed successfully")
             } else {
-                LogManager.shared.addLog("Save dialog cancelled")
-                viewModel.status = .idle
+                LogManager.shared.addLog("Save operation failed")
             }
-        } catch {
-            LogManager.shared.addLog("Error saving WAV: \(error)")
-            viewModel.status = .failure
+        } else {
+            LogManager.shared.addLog("Save dialog cancelled")
+            viewModel.status = .idle
+        }
+    }
+
+    private func showSaveDialog() async -> URL? {
+        await withCheckedContinuation { continuation in
+            let savePanel = NSSavePanel()
+            savePanel.allowedContentTypes = [.wav]
+            savePanel.canCreateDirectories = true
+            savePanel.isExtensionHidden = false
+            savePanel.title = "Save Speech as WAV"
+            savePanel.message = "Choose a location to save the speech file"
+            savePanel.nameFieldStringValue = generateDefaultFilename(
+                from: inputText)
+
+            savePanel.begin { response in
+                if response == .OK, let url = savePanel.url {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
         }
     }
 
@@ -447,39 +469,6 @@ struct ContentView: View {
         case .saving:
             do {}
         }
-    }
-
-    private func showSaveDialog() async throws -> Bool {
-        let savePanel = NSSavePanel()
-        savePanel.allowedContentTypes = [.wav]
-        savePanel.canCreateDirectories = true
-        savePanel.isExtensionHidden = false
-        savePanel.title = "Save Speech as WAV"
-        savePanel.message = "Choose a location to save the speech file"
-        savePanel.nameFieldStringValue = generateDefaultFilename(
-            from: inputText)
-
-        let response = await savePanel.beginSheetModal(for: NSApp.keyWindow!)
-
-        if response == .OK, let url = savePanel.url {
-            viewModel.outputURL = url
-            return true
-        } else {
-            return false
-        }
-    }
-
-    private func performSaveOperation() async throws {
-        LogManager.shared.addLog("Performing save operation")
-        guard let url = viewModel.outputURL else {
-            throw SpeechSynthesizerError.fileNotWritable
-        }
-
-        try await viewModel.startRecording(to: url)
-        _ = try await viewModel.speakAndSave(inputText, voice: selectedVoice)
-        try await viewModel.stopRecording()
-        LogManager.shared.addLog("Save operation completed")
-        viewModel.status = .success
     }
 
     private func transliterate(_ input: String) -> String {

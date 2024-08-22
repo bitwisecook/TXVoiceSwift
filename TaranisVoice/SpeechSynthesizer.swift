@@ -7,343 +7,105 @@ enum SpeechSynthesizerError: Error {
     case fileNotWritable
     case audioWriteFailed
     case noPCMBuffer
+    case synthesisIncomplete
 }
 
-extension FixedWidthInteger {
-    var data: Data {
-        var value = self.littleEndian
-        return Data(bytes: &value, count: MemoryLayout<Self>.size)
-    }
-}
-
-actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
-{
-    let synthesizer: AVSpeechSynthesizer
-    var audioFile: AVAudioFile?
-    var accumulatedBuffer: AVAudioPCMBuffer?
-
-    @Published var status: SaveStatus = .idle
+actor SpeechSynthesizer: ObservableObject {
+    private var synthesizer = AVSpeechSynthesizer()
+    private var accumulatedBuffer: AVAudioPCMBuffer?
     private var outputURL: URL?
-    private var selectedSampleRate: SampleRate = .default
-    private var currentUtteranceID: UUID?
-    private var utteranceIDs: [ObjectIdentifier: UUID] = [:]
-    private var totalExpectedFrames: AVAudioFrameCount = 0
-    private var currentFrameCount: AVAudioFrameCount = 0
-    private var utteranceCompletion: CheckedContinuation<Bool, Error>?
-    private var currentUtteranceIdentifier: ObjectIdentifier?
+    private var selectedSampleRate: Double = 32000
+    private var utteranceCompletion: CheckedContinuation<Void, Error>?
+    private let delegate: SpeechSynthesizerDelegate
 
-    override init() {
-        self.synthesizer = AVSpeechSynthesizer()
-        super.init()
-        self.synthesizer.delegate = self
+    init() {
+        let tempSynthesizer = AVSpeechSynthesizer()
+        self.synthesizer = tempSynthesizer
+        self.delegate = SpeechSynthesizerDelegate()
+        tempSynthesizer.delegate = self.delegate
     }
 
-    func setSampleRate(_ sampleRate: SampleRate) {
+    func setSampleRate(_ sampleRate: Double) {
         selectedSampleRate = sampleRate
+        LogManager.shared.addLog("Sample rate set to \(sampleRate) Hz")
     }
 
-    func speak(_ text: String, voice: AVSpeechSynthesisVoice) async {
-        let utterance = createUtterance(text: text, voice: voice)
-        let utteranceID = UUID()
-        let utteranceObjectID = ObjectIdentifier(utterance)
-        utteranceIDs[utteranceObjectID] = utteranceID
-        currentUtteranceID = utteranceID
-        currentUtteranceIdentifier = utteranceObjectID
-        status = .previewing
-
-        return await withCheckedContinuation { continuation in
-            synthesizer.speak(utterance)
-            Task {
-                await waitForSpeechCompletion()
-                status = .idle
-                continuation.resume()
-            }
-        }
-    }
-
-    private func waitForSpeechCompletion() async {
-        while status == .previewing {
-            try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1 second
-        }
-    }
-
-    nonisolated func speechSynthesizer(
-        _ synthesizer: AVSpeechSynthesizer,
-        didFinish utterance: AVSpeechUtterance
-    ) {
-        Task { [weak self] in
-            await self?.handleSpeechFinished(
-                utteranceIdentifier: ObjectIdentifier(utterance))
-        }
-    }
-
-    private func handleSpeechFinished(utteranceIdentifier: ObjectIdentifier) {
-        guard utteranceIdentifier == currentUtteranceIdentifier else {
-            return  // Ignore if it's not the current utterance
-        }
-        status = .success
-        utteranceCompletion?.resume(returning: true)
-        utteranceCompletion = nil
-        currentUtteranceIdentifier = nil
-        LogManager.shared.addLog("Speech completed successfully")
-    }
-
-    private func handleSpeechError(_ error: Error) {
-        status = .failure
-        utteranceCompletion?.resume(throwing: error)
-        utteranceCompletion = nil
-        currentUtteranceIdentifier = nil
-        LogManager.shared.addLog("Speech error occurred: \(error)")
-    }
-
-    private func createUtterance(text: String, voice: AVSpeechSynthesisVoice)
-        -> AVSpeechUtterance
-    {
+    func speak(_ text: String, voice: AVSpeechSynthesisVoice) async throws {
         LogManager.shared.addLog(
-            "Creating utterance for text '\(text)' using voice '\(voice.name)'")
+            "Starting speech preview: '\(text)' with voice '\(voice.name)'")
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = voice
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        utterance.volume = 1.0
-        return utterance
-    }
-
-    func speakAndSave(_ text: String, voice: AVSpeechSynthesisVoice)
-        async throws -> Bool
-    {
-        let utterance = createUtterance(text: text, voice: voice)
-        currentUtteranceIdentifier = ObjectIdentifier(utterance)
-
-        accumulatedBuffer = nil
-        totalExpectedFrames = AVAudioFrameCount(
-            Double(utterance.speechString.count) * 220)  // Rough estimate
-        currentFrameCount = 0
-
-        guard let outputURL = outputURL else {
-            throw SpeechSynthesizerError.fileNotWritable
-        }
-
-        try startRecording(to: outputURL)
 
         return try await withCheckedThrowingContinuation { continuation in
-            utteranceCompletion = continuation
-            synthesizer.write(utterance) { [weak self] buffer in
-                guard let self = self else { return }
-                Task {
-                    do {
-                        try await self.accumulateBuffer(buffer)
-                    } catch {
-                        await self.handleSpeechError(error)
-                    }
-                }
+            self.utteranceCompletion = continuation
+            delegate.onUtteranceComplete = { [weak self] error in
+                Task { await self?.completeUtterance(with: error) }
             }
+            synthesizer.speak(utterance)
         }
     }
 
-    private func synthesizeAndAccumulate(utterance: AVSpeechUtterance)
-        async throws -> Bool
-    {
-        return try await withCheckedThrowingContinuation { continuation in
-            synthesizer.write(utterance) { [weak self] buffer in
-                guard let self = self else { return }
-                Task {
-                    do {
-                        try await self.accumulateBuffer(buffer)
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                continuation.resume(returning: true)
-            }
-        }
-    }
-
-    private func accumulateBuffer(_ buffer: AVAudioBuffer) async throws {
-        guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
-            throw SpeechSynthesizerError.noPCMBuffer
-        }
-
-        if accumulatedBuffer == nil {
-            accumulatedBuffer = pcmBuffer
-        } else {
-            accumulatedBuffer = mergeBuffers(
-                buffer1: accumulatedBuffer!, buffer2: pcmBuffer)
-        }
-
-        currentFrameCount += pcmBuffer.frameLength
-    }
-
-    private func mergeBuffers(
-        buffer1: AVAudioPCMBuffer, buffer2: AVAudioPCMBuffer
-    ) -> AVAudioPCMBuffer {
-        let newFrameLength = buffer1.frameLength + buffer2.frameLength
-        let mergedBuffer = AVAudioPCMBuffer(
-            pcmFormat: buffer1.format,
-            frameCapacity: newFrameLength
-        )!
-
-        mergedBuffer.frameLength = newFrameLength
-        memcpy(
-            mergedBuffer.floatChannelData![0], buffer1.floatChannelData![0],
-            Int(buffer1.frameLength) * MemoryLayout<Float>.size)
-        memcpy(
-            mergedBuffer.floatChannelData![0].advanced(
-                by: Int(buffer1.frameLength)), buffer2.floatChannelData![0],
-            Int(buffer2.frameLength) * MemoryLayout<Float>.size)
-
-        return mergedBuffer
-    }
-
-    func startRecording(to url: URL) throws {
-        outputURL = url
-        status = .saving
-    }
-
-    func stopRecording() async throws {
-        guard let accumulatedBuffer = accumulatedBuffer else {
-            LogManager.shared.addLog("No accumulated buffer to save")
-            throw SpeechSynthesizerError.noAccumulatedBuffer
-        }
-
-        LogManager.shared.addLog("Output URL: \(String(describing: outputURL))")
+    func speakAndSave(
+        _ text: String, voice: AVSpeechSynthesisVoice, to url: URL
+    ) async throws {
         LogManager.shared.addLog(
-            "Buffer format before resampling: \(accumulatedBuffer.format)")
-
-        let resampledBuffer = resample(
-            buffer: accumulatedBuffer,
-            toSampleRate: Double(selectedSampleRate.rawValue))
-        LogManager.shared.addLog(
-            "Buffer format before changing bit depth: \(resampledBuffer.format)"
+            "Starting speech synthesis and save: '\(text)' with voice '\(voice.name)'"
         )
 
-        guard let outputURL = outputURL else {
-            LogManager.shared.addLog(
-                "File not writable: \(String(outputURL?.path() ?? "nil"))"
-            )
-            throw SpeechSynthesizerError.fileNotWritable
-        }
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = voice
 
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: Double(selectedSampleRate.rawValue),
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-        ]
+        let audioEngine = AVAudioEngine()
+        let playerNode = AVAudioPlayerNode()
+        audioEngine.attach(playerNode)
 
-        LogManager.shared.addLog("Settings: \(settings)")
+        let format = AVAudioFormat(
+            standardFormatWithSampleRate: selectedSampleRate, channels: 1)!
+        audioEngine.connect(
+            playerNode, to: audioEngine.mainMixerNode, format: format)
 
-        let audioFile = try AVAudioFile(
-            forWriting: outputURL, settings: settings)
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
 
-        guard resampledBuffer.frameLength > 0 else {
-            LogManager.shared.addLog("Buffer has no frames to write")
-            throw SpeechSynthesizerError.bufferHasNoFrames
-        }
-
-        guard audioFile.processingFormat == resampledBuffer.format else {
-            LogManager.shared.addLog(
-                "Format mismatch: file \(audioFile.processingFormat) vs resampledBuffer \(resampledBuffer.format)"
-            )
-            throw SpeechSynthesizerError.formatMismatch
-        }
-
-        guard FileManager.default.isWritableFile(atPath: outputURL.path) else {
-            LogManager.shared.addLog(
-                "The file path: '\(outputURL.path)' is not writable.")
-            throw SpeechSynthesizerError.fileNotWritable
-        }
-
-        LogManager.shared.addLog("Attempting to write the buffer to file...")
-        do {
-            try await writeBufferToDisk(
-                resampledBuffer, to: outputURL, settings: settings)
-            status = .success
-            LogManager.shared.addLog("Audio saved successfully.")
-        } catch {
-            status = .failure
-            LogManager.shared.addLog("Failed to save audio: \(error)")
-            throw error
-        }
-    }
-
-    private func writeBufferToDisk(
-        _ buffer: AVAudioPCMBuffer, to url: URL, settings: [String: Any]
-    ) async throws {
-        let audioData = convertToInt16Data(from: buffer)
         return try await withCheckedThrowingContinuation { continuation in
+            self.utteranceCompletion = continuation
+            delegate.onUtteranceComplete = { [weak self] error in
+                Task { await self?.completeUtterance(with: error) }
+            }
+
+            synthesizer.write(utterance) { buffer in
+                guard let pcmBuffer = buffer as? AVAudioPCMBuffer,
+                    pcmBuffer.frameLength > 0
+                else {
+                    return
+                }
+
+                let convertedBuffer: AVAudioPCMBuffer
+                if pcmBuffer.format.sampleRate != self.selectedSampleRate {
+                    convertedBuffer = self.resample(
+                        buffer: pcmBuffer, toSampleRate: self.selectedSampleRate
+                    )
+                } else {
+                    convertedBuffer = pcmBuffer
+                }
+
+                do {
+                    try file.write(from: convertedBuffer)
+                    LogManager.shared.addLog(
+                        "Wrote \(convertedBuffer.frameLength) frames to file")
+                } catch {
+                    LogManager.shared.addLog("Error writing to file: \(error)")
+                    continuation.resume(throwing: error)
+                }
+            }
+
             do {
-                try writeWavFile(
-                    audioData: audioData, to: url,
-                    sampleRate: UInt32(selectedSampleRate.rawValue))
-                continuation.resume(returning: ())
+                try audioEngine.start()
+                LogManager.shared.addLog("Audio engine started")
             } catch {
+                LogManager.shared.addLog(
+                    "Error starting audio engine: \(error)")
                 continuation.resume(throwing: error)
             }
-        }
-    }
-
-    func convertToInt16Data(from buffer: AVAudioPCMBuffer) -> Data {
-        let floatData = buffer.floatChannelData![0]
-        let frameCount = Int(buffer.frameLength)
-        var int16Data = Data(count: frameCount * 2)
-
-        int16Data.withUnsafeMutableBytes { int16Buffer in
-            let int16Ptr = int16Buffer.bindMemory(to: Int16.self).baseAddress!
-            for i in 0..<frameCount {
-                let floatSample = floatData[i]
-                let int16Sample = Int16(
-                    max(-32768, min(32767, round(floatSample * 32767))))
-                int16Ptr[i] = int16Sample
-            }
-        }
-
-        return int16Data
-    }
-
-    func writeWavFile(
-        audioData: Data, to url: URL, sampleRate: UInt32
-    ) throws {
-        let channelCount: UInt16 = 1
-        let bitsPerSample: UInt16 = 16
-        let byteRate = sampleRate * UInt32(channelCount * bitsPerSample / 8)
-        let blockAlign = channelCount * bitsPerSample / 8
-        let dataSize = UInt32(audioData.count)
-        let fileSize = 36 + dataSize
-
-        var header = Data(capacity: 44)
-        header.append(contentsOf: "RIFF".utf8)
-        header.append(fileSize.littleEndian.data)
-        header.append(contentsOf: "WAVEfmt ".utf8)
-        header.append(UInt32(16).littleEndian.data)
-        header.append(UInt16(1).littleEndian.data)
-        header.append(channelCount.littleEndian.data)
-        header.append(sampleRate.littleEndian.data)
-        header.append(byteRate.littleEndian.data)
-        header.append(blockAlign.littleEndian.data)
-        header.append(bitsPerSample.littleEndian.data)
-        header.append(contentsOf: "data".utf8)
-        header.append(dataSize.littleEndian.data)
-
-        let fileHandle = try FileHandle(forWritingTo: url)
-        defer { fileHandle.closeFile() }
-
-        // Write header
-        fileHandle.write(header)
-
-        // Write audio data in chunks
-        let chunkSize = 4096
-        var writtenBytes = header.count
-        for i in stride(from: 0, to: audioData.count, by: chunkSize) {
-            let upperBound = min(i + chunkSize, audioData.count)
-            let chunk = audioData[i..<upperBound]
-            fileHandle.write(chunk)
-            writtenBytes += chunk.count
         }
     }
 
@@ -364,29 +126,26 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
 
         let ratio = newSampleRate / inputFormat.sampleRate
-        let estimatedOutputFrameCount = AVAudioFrameCount(
+        let outputFrameCapacity = AVAudioFrameCount(
             Double(buffer.frameLength) * ratio)
-
         guard
             let outputBuffer = AVAudioPCMBuffer(
-                pcmFormat: outputFormat,
-                frameCapacity: estimatedOutputFrameCount)
+                pcmFormat: outputFormat, frameCapacity: outputFrameCapacity)
         else {
-            LogManager.shared.addLog("Failed to create output buffer")
+            LogManager.shared.addLog(
+                "Failed to create output buffer for resampling")
             return buffer
         }
 
         var error: NSError?
-        let _ = converter.convert(to: outputBuffer, error: &error) {
+        let inputBlock: AVAudioConverterInputBlock = {
             inNumPackets, outStatus in
-            if buffer.frameLength > 0 {
-                outStatus.pointee = .haveData
-                return buffer
-            } else {
-                outStatus.pointee = .endOfStream
-                return nil
-            }
+            outStatus.pointee = .haveData
+            return buffer
         }
+
+        converter.convert(
+            to: outputBuffer, error: &error, withInputFrom: inputBlock)
 
         if let error = error {
             LogManager.shared.addLog("Error during conversion: \(error)")
@@ -394,5 +153,71 @@ actor SpeechSynthesizer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate
         }
 
         return outputBuffer
+    }
+
+    private func writeBufferToWavFile(_ buffer: AVAudioPCMBuffer, to url: URL)
+        async throws
+    {
+        do {
+            let audioFile = try AVAudioFile(
+                forWriting: url, settings: buffer.format.settings)
+            try audioFile.write(from: buffer)
+        } catch {
+            LogManager.shared.addLog("Error writing audio file: \(error)")
+            throw SpeechSynthesizerError.audioWriteFailed
+        }
+    }
+
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didFinish utterance: AVSpeechUtterance
+    ) {
+        Task { @MainActor in
+            LogManager.shared.addLog("Speech synthesis completed")
+            await self.completeUtterance()
+        }
+    }
+
+    nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didCancel utterance: AVSpeechUtterance
+    ) {
+        Task { @MainActor in
+            LogManager.shared.addLog("Speech synthesis cancelled")
+            await self.completeUtterance(
+                with: SpeechSynthesizerError.synthesisIncomplete)
+        }
+    }
+
+    private func completeUtterance(with error: Error? = nil) {
+        LogManager.shared.addLog("Completing utterance")
+        if let error = error {
+            LogManager.shared.addLog("Utterance completed with error: \(error)")
+            utteranceCompletion?.resume(throwing: error)
+        } else {
+            LogManager.shared.addLog("Utterance completed successfully")
+            utteranceCompletion?.resume()
+        }
+        utteranceCompletion = nil
+    }
+}
+
+class SpeechSynthesizerDelegate: NSObject, AVSpeechSynthesizerDelegate {
+    var onUtteranceComplete: ((Error?) -> Void)?
+
+    func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didFinish utterance: AVSpeechUtterance
+    ) {
+        LogManager.shared.addLog("Speech synthesis completed")
+        onUtteranceComplete?(nil)
+    }
+
+    func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didCancel utterance: AVSpeechUtterance
+    ) {
+        LogManager.shared.addLog("Speech synthesis cancelled")
+        onUtteranceComplete?(SpeechSynthesizerError.synthesisIncomplete)
     }
 }
