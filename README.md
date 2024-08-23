@@ -1,2 +1,8 @@
 # TaranisVoiceSwift
-A basic port of my old TaranisVoice python to SwiftUI
+A MacOS app for creating `.wav` files compatible with Taranis FrSky controllers using the Mac voices.
+
+## Compatibility
+MacOS 14.6+
+
+## Recommendation
+[Install](https://support.apple.com/en-gb/guide/mac-help/mchlp2290/) an `Enhanced` or `Premium` voice from **System Settings** > **Accessibility** > **Spoken Content** > **System Voice** > **Manage Voices** and click the download icon next to the name. `Enhanced` voices get a gold icon in the voice selector, `Premium` get a light blue icon.
