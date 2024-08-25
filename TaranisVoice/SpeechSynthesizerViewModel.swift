@@ -1,21 +1,21 @@
-import SwiftUI
 import AVFoundation
+import SwiftUI
 
 @MainActor
 class SpeechSynthesizerViewModel: ObservableObject {
     @Published var status: SaveStatus = .idle
     @Published var selectedSampleRate: SampleRate = .default
     private let synthesizer: SpeechSynthesizer
-    
+
     init() {
         synthesizer = SpeechSynthesizer()
     }
-    
+
     func setSampleRate(_ sampleRate: SampleRate) async {
         await synthesizer.setSampleRate(Double(sampleRate.rawValue))
         selectedSampleRate = sampleRate
     }
-    
+
     func speak(_ text: String, voice: AVSpeechSynthesisVoice) async {
         status = .previewing
         LogManager.shared.addLog("Status changed to previewing")
@@ -30,7 +30,7 @@ class SpeechSynthesizerViewModel: ObservableObject {
                 "Status changed to failure after preview error")
         }
     }
-    
+
     func speakAndSave(
         _ text: String, voice: AVSpeechSynthesisVoice, to url: URL
     ) async {

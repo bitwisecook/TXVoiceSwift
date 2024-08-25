@@ -27,7 +27,6 @@ enum SampleRate: Int, CaseIterable, Identifiable {
     static var `default`: SampleRate { .rate32kHz }
 }
 
-
 struct ContentView: View {
     @State private var inputText: String = "Terrain, pull up!"
     @State private var selectedVoice: AVSpeechSynthesisVoice

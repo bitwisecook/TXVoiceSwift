@@ -1,5 +1,5 @@
-import SwiftUI
 import AVFoundation
+import SwiftUI
 
 struct VoiceGroup: Identifiable {
     let id = UUID()
@@ -12,7 +12,7 @@ struct VoiceGroup: Identifiable {
 struct ColoredSFSymbol: View {
     let systemName: String
     let color: Color
-    
+
     var body: some View {
         Image(systemName: systemName)
             .foregroundColor(color)
@@ -23,7 +23,7 @@ struct ColoredSFSymbol: View {
 struct VoicePickerView: View {
     @Binding var selection: AVSpeechSynthesisVoice
     let voiceGroups: [VoiceGroup]
-    
+
     var body: some View {
         Menu {
             ForEach(voiceGroups) { group in
