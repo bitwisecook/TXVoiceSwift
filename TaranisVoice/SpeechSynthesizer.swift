@@ -83,10 +83,46 @@ actor SpeechSynthesizer: ObservableObject {
 
                 Task {
                     do {
+                        LogManager.shared.addLog(
+                            "Attempting to write to file: \(url.path)")
                         try await self.writeToFile(
                             buffer: accumulatedBuffer, url: url)
+                        LogManager.shared.addLog("File written successfully")
                         continuation.resume()
                     } catch {
+                        LogManager.shared.addLog(
+                            "Error in writeToFile: \(error.localizedDescription)"
+                        )
+                        if let nsError = error as NSError? {
+                            LogManager.shared.addLog(
+                                "Error domain: \(nsError.domain), code: \(nsError.code)"
+                            )
+                            if let underlyingError = nsError.userInfo[
+                                NSUnderlyingErrorKey] as? NSError
+                            {
+                                LogManager.shared.addLog(
+                                    "Underlying error: \(underlyingError.localizedDescription)"
+                                )
+                                LogManager.shared.addLog(
+                                    "Underlying error domain: \(underlyingError.domain), code: \(underlyingError.code)"
+                                )
+                            }
+                            if let filePath = nsError.userInfo[
+                                NSFilePathErrorKey] as? String
+                            {
+                                LogManager.shared.addLog(
+                                    "File path: \(filePath)")
+                            }
+
+                            // Check if the error is related to file permissions
+                            if nsError.domain == NSCocoaErrorDomain
+                                && nsError.code == 513
+                            {
+                                LogManager.shared.addLog(
+                                    "This might be a file permissions issue. Please check the app's sandbox settings."
+                                )
+                            }
+                        }
                         continuation.resume(throwing: error)
                     }
                 }

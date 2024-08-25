@@ -5,6 +5,21 @@ struct TaranisVoiceApp: App {
     @StateObject private var logManager = LogManager.shared
     @State private var isLogWindowVisible = false
 
+    init() {
+        logVersionAndBuild()
+    }
+
+    private func logVersionAndBuild() {
+        let version =
+            Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "Unknown"
+        let build =
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
+            as? String ?? "Unknown"
+        LogManager.shared.addLog(
+            "TaranisVoice starting up - Version: \(version), Build: \(build)")
+    }
     var body: some Scene {
         WindowGroup {
             ContentView()
