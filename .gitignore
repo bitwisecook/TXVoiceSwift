@@ -1,5 +1,5 @@
-xcuserdata/
-*.xcodeproj/*
+**/*.xcodeproj/xcuserdata/
+**/*.xcodeproj/*
             !*.xcodeproj/project.pbxproj
             !*.xcodeproj/xcshareddata/
             !*.xcodeproj/project.xcworkspace/
