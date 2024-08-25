@@ -36,31 +36,43 @@ struct LogView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.logWindowVisibility) private var logWindowVisibility
 
-    @State private var showCopiedAlert = false
+    @State private var scrollProxy: ScrollViewProxy?
+    @State private var showCopyConfirmation = false
 
     var body: some View {
         VStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(logManager.logs.indices, id: \.self) { index in
-                        Text(logManager.logs[index])
-                            .font(.system(.body, design: .monospaced))
-                    }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(logManager.getAllLogs())
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id("logContent")
                 }
-                .padding()
+                .background(Color(NSColor.textBackgroundColor))
+                .cornerRadius(4)
+                .onAppear {
+                    scrollProxy = proxy
+                    scrollToBottom()
+                }
             }
         }
-        .alert("Logs Copied", isPresented: $showCopiedAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("All logs have been copied to the clipboard.")
+        .onChange(of: logManager.logs) { _, _ in
+            scrollToBottom()
         }
         HStack {
             Spacer()
-            Button("Copy Logs") {
-                copyLogs()
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .opacity(showCopyConfirmation ? 1 : 0)
+                    .scaleEffect(showCopyConfirmation ? 1 : 0.5)
+                Button("Copy Logs") {
+                    copyLogs()
+                }
+                .keyboardShortcut("C", modifiers: [.command, .shift])
             }
-            .keyboardShortcut("C", modifiers: [.command, .shift])
 
             Button("Close") {
                 dismiss()
@@ -77,6 +89,23 @@ struct LogView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(logManager.getAllLogs(), forType: .string)
-        showCopiedAlert = true
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showCopyConfirmation = true
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showCopyConfirmation = false
+            }
+        }
+    }
+
+    private func scrollToBottom() {
+        DispatchQueue.main.async {
+            withAnimation {
+                scrollProxy?.scrollTo("logContent", anchor: .bottom)
+            }
+        }
     }
 }
