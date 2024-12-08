@@ -70,7 +70,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 20) {
             // Image Logo
-            Image("TaranisVoiceLogo")
+            Image("TXVoiceLogo")
                 .resizable()
                 .scaledToFit()
                 .frame(height: 120)

@@ -1,13 +1,13 @@
 //
-//  TaranisVoiceUITestsLaunchTests.swift
-//  TaranisVoiceUITests
+//  TXVoiceUITestsLaunchTests.swift
+//  TXVoiceUITests
 //
 //  Created by James Deucker on 16/08/2024.
 //
 
 import XCTest
 
-final class TaranisVoiceUITestsLaunchTests: XCTestCase {
+final class TXVoiceUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

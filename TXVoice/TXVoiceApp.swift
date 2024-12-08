@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct TaranisVoiceApp: App {
+struct TXVoiceApp: App {
     @StateObject private var logManager = LogManager.shared
     @State private var isLogWindowVisible = false
 
@@ -18,7 +18,7 @@ struct TaranisVoiceApp: App {
             Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
             as? String ?? "Unknown"
         LogManager.shared.addLog(
-            "TaranisVoice starting up - Version: \(version), Build: \(build)")
+            "TXVoice starting up - Version: \(version), Build: \(build)")
     }
     var body: some Scene {
         WindowGroup {

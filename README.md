@@ -1,5 +1,5 @@
-# TaranisVoiceSwift
-A MacOS app for creating `.wav` files compatible with Taranis FrSky controllers using the Mac voices.
+# TXVoiceSwift
+A MacOS app for creating `.wav` files compatible with Taranis FrSky and EdgeTX/OpenTX controllers using the Mac speech synthesis voices.
 
 ## Compatibility
 MacOS 14.6+

@@ -1,13 +1,13 @@
 //
-//  TaranisVoiceUITests.swift
-//  TaranisVoiceUITests
+//  TXVoiceUITests.swift
+//  TXVoiceUITests
 //
 //  Created by James Deucker on 16/08/2024.
 //
 
 import XCTest
 
-final class TaranisVoiceUITests: XCTestCase {
+final class TXVoiceUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
