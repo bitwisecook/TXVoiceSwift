@@ -10,7 +10,7 @@ enum SpeechSynthesizerError: Error {
     case synthesisIncomplete
 }
 
-actor SpeechSynthesizer: ObservableObject {
+actor SpeechSynthesizer {
     private var synthesizer = AVSpeechSynthesizer()
     private var selectedSampleRate: Double = 32000
     private let delegate: SpeechSynthesizerDelegate
@@ -75,56 +75,28 @@ actor SpeechSynthesizer: ObservableObject {
         var currentFrame: AVAudioFrameCount = 0
 
         return try await withCheckedThrowingContinuation { continuation in
-            delegate.onUtteranceComplete = { [weak self] error in
-                guard let self = self else { return }
+            delegate.onUtteranceComplete = { error in
                 LogManager.shared.addLog(
                     "Speech synthesis completed, frames accumulated: \(currentFrame)"
                 )
 
-                Task {
-                    do {
-                        LogManager.shared.addLog(
-                            "Attempting to write to file: \(url.path)")
-                        try await self.writeToFile(
-                            buffer: accumulatedBuffer, url: url)
-                        LogManager.shared.addLog("File written successfully")
-                        continuation.resume()
-                    } catch {
-                        LogManager.shared.addLog(
-                            "Error in writeToFile: \(error.localizedDescription)"
-                        )
-                        if let nsError = error as NSError? {
-                            LogManager.shared.addLog(
-                                "Error domain: \(nsError.domain), code: \(nsError.code)"
-                            )
-                            if let underlyingError = nsError.userInfo[
-                                NSUnderlyingErrorKey] as? NSError
-                            {
-                                LogManager.shared.addLog(
-                                    "Underlying error: \(underlyingError.localizedDescription)"
-                                )
-                                LogManager.shared.addLog(
-                                    "Underlying error domain: \(underlyingError.domain), code: \(underlyingError.code)"
-                                )
-                            }
-                            if let filePath = nsError.userInfo[
-                                NSFilePathErrorKey] as? String
-                            {
-                                LogManager.shared.addLog(
-                                    "File path: \(filePath)")
-                            }
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
 
-                            // Check if the error is related to file permissions
-                            if nsError.domain == NSCocoaErrorDomain
-                                && nsError.code == 513
-                            {
-                                LogManager.shared.addLog(
-                                    "This might be a file permissions issue. Please check the app's sandbox settings."
-                                )
-                            }
-                        }
-                        continuation.resume(throwing: error)
-                    }
+                do {
+                    LogManager.shared.addLog(
+                        "Attempting to write to file: \(url.path)")
+                    try AudioFileManager.shared.writeBufferToDisk(
+                        accumulatedBuffer, to: url,
+                        sampleRate: self.selectedSampleRate)
+                    LogManager.shared.addLog("File written successfully")
+                    continuation.resume()
+                } catch {
+                    LogManager.shared.addLog(
+                        "Error writing file: \(error.localizedDescription)")
+                    continuation.resume(throwing: error)
                 }
             }
 
@@ -177,24 +149,6 @@ actor SpeechSynthesizer: ObservableObject {
                 LogManager.shared.addLog(
                     "Accumulated \(framesToAdd) frames, total: \(currentFrame)")
             }
-        }
-    }
-
-    private func writeToFile(buffer: AVAudioPCMBuffer, url: URL) async throws {
-        if buffer.frameLength > 0 {
-            do {
-                LogManager.shared.addLog("Starting to write audio file...")
-                try await AudioFileManager.shared.writeBufferToDisk(
-                    buffer, to: url, sampleRate: self.selectedSampleRate)
-                LogManager.shared.addLog(
-                    "Audio file written successfully to \(url.path)")
-            } catch {
-                LogManager.shared.addLog("Error writing audio file: \(error)")
-                throw error
-            }
-        } else {
-            LogManager.shared.addLog("No audio data to write")
-            throw SpeechSynthesizerError.noAccumulatedBuffer
         }
     }
 

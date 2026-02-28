@@ -51,7 +51,7 @@ struct LogView: View {
                         .id("logContent")
                 }
                 .background(Color(NSColor.textBackgroundColor))
-                .cornerRadius(4)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
                 .onAppear {
                     scrollProxy = proxy
                     scrollToBottom()
@@ -65,7 +65,7 @@ struct LogView: View {
             Spacer()
             HStack {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
+                    .foregroundStyle(.green)
                     .opacity(showCopyConfirmation ? 1 : 0)
                     .scaleEffect(showCopyConfirmation ? 1 : 0.5)
                 Button("Copy Logs") {

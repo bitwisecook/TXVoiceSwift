@@ -15,7 +15,7 @@ struct ColoredSFSymbol: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .foregroundColor(color)
+            .foregroundStyle(color)
             .symbolRenderingMode(.palette)
     }
 }
@@ -27,7 +27,7 @@ struct VoicePickerView: View {
     var body: some View {
         Menu {
             ForEach(voiceGroups) { group in
-                Section(header: Text(group.name).foregroundColor(.secondary)) {
+                Section(header: Text(group.name).foregroundStyle(.secondary)) {
                     ForEach(group.voices, id: \.identifier) { voice in
                         Button(action: {
                             selection = voice
