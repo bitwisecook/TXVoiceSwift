@@ -421,7 +421,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoice;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -450,7 +450,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoice;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -466,7 +466,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoiceTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TXVoice.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TXVoice";
 			};
 			name = Debug;
@@ -483,7 +483,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoiceTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TXVoice.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/TXVoice";
 			};
 			name = Release;
@@ -498,7 +498,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoiceUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TEST_TARGET_NAME = TXVoice;
 			};
 			name = Debug;
@@ -513,7 +513,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoiceUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TEST_TARGET_NAME = TXVoice;
 			};
 			name = Release;

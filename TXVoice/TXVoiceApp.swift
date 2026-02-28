@@ -26,7 +26,11 @@ struct TXVoiceApp: App {
                 .environmentObject(logManager)
                 .environment(
                     \.logWindowVisibility,
-                    (isLogWindowVisible, { self.isLogWindowVisible = $0 }))
+                    (isLogWindowVisible, { @Sendable newValue in
+                        Task { @MainActor in
+                            self.isLogWindowVisible = newValue
+                        }
+                    }))
         }
         .commands {
             CommandGroup(replacing: .newItem) {}  // Remove default New menu item

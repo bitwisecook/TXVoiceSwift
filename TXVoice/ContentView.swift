@@ -305,16 +305,16 @@ struct ContentView: View {
 
         switch newStatus {
         case .success, .failure:
-            let delay: Double = newStatus == .success ? 1.0 : 2.0
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            let delay: Duration = newStatus == .success ? .seconds(1) : .seconds(2)
+            Task {
+                try? await Task.sleep(for: delay)
                 withAnimation(.easeInOut(duration: 0.5)) {
-                    self.statusOpacity = 0
+                    statusOpacity = 0
                 }
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.5) {
-                self.viewModel.status = .idle
+                try? await Task.sleep(for: .seconds(0.5))
+                viewModel.status = .idle
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    self.statusOpacity = 1.0
+                    statusOpacity = 1.0
                 }
             }
         case .idle, .previewing, .saving:

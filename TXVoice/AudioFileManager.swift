@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 
-class AudioFileManager {
+final class AudioFileManager: @unchecked Sendable {
     static let shared = AudioFileManager()
 
     private init() {}

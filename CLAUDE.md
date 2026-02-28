@@ -6,7 +6,7 @@ macOS app for creating `.wav` files for Taranis FrSky and EdgeTX/OpenTX controll
 
 - Open `TXVoice.xcodeproj` in Xcode
 - Deployment target: macOS 13.0 (Ventura)
-- Swift 5.0, no external dependencies
+- Swift 6, no external dependencies
 
 ## Guidelines
 
