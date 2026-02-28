@@ -97,7 +97,7 @@ struct ContentView: View {
                 }
             }
             .pickerStyle(MenuPickerStyle())
-            .onChange(of: selectedVoice) { oldVoice, newVoice in
+            .onChange(of: selectedVoice) { newVoice in
                 UserDefaults.standard.set(
                     newVoice.identifier, forKey: "SelectedVoiceIdentifier")
             }
@@ -186,16 +186,16 @@ struct ContentView: View {
         }
         .padding()
         .frame(width: 400)
-        .onChange(of: logWindowVisibility.isVisible) { oldValue, newValue in
+        .onChange(of: logWindowVisibility.isVisible) { newValue in
             if newValue {
                 openWindow(id: "logWindow")
             } else {
                 dismissWindow(id: "logWindow")
             }
         }
-        .onChange(of: viewModel.status) { oldStatus, newStatus in
+        .onChange(of: viewModel.status) { newStatus in
             LogManager.shared.addLog(
-                "Status changed from \(oldStatus) to \(newStatus)")
+                "Status changed to \(newStatus)")
             animateStatusChange(newStatus)
         }
     }

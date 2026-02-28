@@ -37,8 +37,7 @@ struct TXVoiceApp: App {
             LogView()
                 .environmentObject(logManager)
         }
-        .defaultSize(CGSize(width: 600, height: 300))
-        .keyboardShortcut("L", modifiers: [.command, .shift])
+        .defaultSize(width: 600, height: 300)
         .windowResizability(.contentSize)
     }
 }

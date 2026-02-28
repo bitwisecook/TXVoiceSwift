@@ -58,7 +58,7 @@ struct LogView: View {
                 }
             }
         }
-        .onChange(of: logManager.logs) { _, _ in
+        .onChange(of: logManager.logs) { _ in
             scrollToBottom()
         }
         HStack {
