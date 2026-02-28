@@ -1,0 +1,11 @@
+// Copy this file to TXVoice/DeveloperConfig.local.swift
+// and fill in your email address. That file is git-ignored
+// and will never be committed.
+//
+// Because TXVoice uses PBXFileSystemSynchronizedRootGroup,
+// any .swift file placed in TXVoice/ is automatically
+// included in the build.
+
+extension DeveloperConfig {
+    static let localDebugEmailAddress: String? = "your-email@example.com"
+}

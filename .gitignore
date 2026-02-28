@@ -1,3 +1,4 @@
+DeveloperConfig.local.swift
 **/*.xcodeproj/xcuserdata/
 **/*.xcodeproj/*
             !*.xcodeproj/project.pbxproj

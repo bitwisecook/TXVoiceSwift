@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import SwiftTinyLoggerWindow
 
 enum SaveStatus {
     case idle
@@ -31,12 +32,15 @@ struct ContentView: View {
     @State private var inputText: String = "Terrain, pull up!"
     @State private var selectedVoice: AVSpeechSynthesisVoice
     @State private var groupedVoices: [VoiceGroup] = []
-    @StateObject private var viewModel = SpeechSynthesizerViewModel()
+    @State private var availableVoices: [AVSpeechSynthesisVoice] = []
+    @State private var viewModel: SpeechSynthesizerViewModel?
+    @State private var showDoneMessage = false
+    @State private var doneOpacity: Double = 1.0
     @State private var selectedSampleRate: SampleRate = .default
     @State private var statusOpacity: Double = 1.0
-    @Environment(\.logWindowVisibility) private var logWindowVisibility
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.dismissWindow) private var dismissWindow
+    @State private var isAnimating: Bool = false
+    @State private var animationTimer: Timer?
+    @Environment(AppLogger.self) private var logger
 
     init() {
         let voices = AVSpeechSynthesisVoice.speechVoices()
@@ -60,6 +64,10 @@ struct ContentView: View {
         } else {
             fatalError("No speech synthesis voices available on this system")
         }
+    }
+
+    private var status: SaveStatus {
+        viewModel?.status ?? .idle
     }
 
     var body: some View {
@@ -103,7 +111,7 @@ struct ContentView: View {
                     Button(action: {
                         selectedSampleRate = rate
                         Task {
-                            await viewModel.setSampleRate(rate)
+                            await viewModel?.setSampleRate(rate)
                         }
                     }) {
                         Text(rate.description)
@@ -133,14 +141,14 @@ struct ContentView: View {
                         await preview()
                     }
                 }
-                .disabled(viewModel.status != .idle)
+                .disabled(status != .idle)
 
                 Button("Save to .wav") {
                     Task {
                         await saveToWav()
                     }
                 }
-                .disabled(viewModel.status != .idle)
+                .disabled(status != .idle)
             }
 
             // Divider line
@@ -152,7 +160,7 @@ struct ContentView: View {
             // Status
             ZStack {
                 Group {
-                    switch viewModel.status {
+                    switch status {
                     case .idle:
                         Text("idle")
                             .foregroundStyle(Color("MainStatusIdleColor"))
@@ -181,16 +189,13 @@ struct ContentView: View {
         }
         .padding()
         .frame(width: 400)
-        .onChange(of: logWindowVisibility.isVisible) { newValue in
-            if newValue {
-                openWindow(id: "logWindow")
-            } else {
-                dismissWindow(id: "logWindow")
+        .onAppear {
+            if viewModel == nil {
+                viewModel = SpeechSynthesizerViewModel(logger: logger)
             }
         }
-        .onChange(of: viewModel.status) { newStatus in
-            LogManager.shared.addLog(
-                "Status changed to \(newStatus)")
+        .onChange(of: status) { oldStatus, newStatus in
+            logger.log(.info, phase: "UI", "Status changed from \(oldStatus) to \(newStatus)")
             animateStatusChange(newStatus)
         }
     }
@@ -256,24 +261,23 @@ struct ContentView: View {
     }
 
     private func preview() async {
-        await viewModel.speak(inputText, voice: selectedVoice)
+        await viewModel?.speak(inputText, voice: selectedVoice)
     }
 
     private func saveToWav() async {
-        LogManager.shared.addLog("Starting saveToWav operation")
+        logger.log(.debug, phase: "UI", "Starting saveToWav operation")
         if let url = await showSaveDialog() {
-            LogManager.shared.addLog("Save dialog confirmed")
-            await viewModel.speakAndSave(
+            logger.log(.debug, phase: "UI", "Save dialog confirmed")
+            await viewModel?.speakAndSave(
                 inputText, voice: selectedVoice, to: url)
-            if viewModel.status == .success {
-                LogManager.shared.addLog(
-                    "Save operation completed successfully")
+            if status == .success {
+                logger.log(.info, phase: "UI", "Save operation completed successfully")
             } else {
-                LogManager.shared.addLog("Save operation failed")
+                logger.log(.error, phase: "UI", "Save operation failed")
             }
         } else {
-            LogManager.shared.addLog("Save dialog cancelled")
-            viewModel.status = .idle
+            logger.log(.debug, phase: "UI", "Save dialog cancelled")
+            viewModel?.status = .idle
         }
     }
 
@@ -304,15 +308,26 @@ struct ContentView: View {
         }
 
         switch newStatus {
-        case .success, .failure:
-            let delay: Duration = newStatus == .success ? .seconds(1) : .seconds(2)
+        case .success:
             Task {
-                try? await Task.sleep(for: delay)
+                try? await Task.sleep(for: .seconds(1))
                 withAnimation(.easeInOut(duration: 0.5)) {
                     statusOpacity = 0
                 }
                 try? await Task.sleep(for: .seconds(0.5))
-                viewModel.status = .idle
+                self.viewModel?.status = .idle
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    statusOpacity = 1.0
+                }
+            }
+        case .failure:
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    statusOpacity = 0
+                }
+                try? await Task.sleep(for: .seconds(0.5))
+                self.viewModel?.status = .idle
                 withAnimation(.easeInOut(duration: 0.3)) {
                     statusOpacity = 1.0
                 }

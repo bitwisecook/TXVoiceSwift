@@ -1,12 +1,32 @@
 import SwiftUI
+import SwiftTinyLoggerWindow
 
 @main
 struct TXVoiceApp: App {
-    @StateObject private var logManager = LogManager.shared
-    @State private var isLogWindowVisible = false
+    @State private var logger = AppLogger(
+        appName: "TXVoice",
+        subsystem: "com.bragi0.TXVoice",
+        debugEmailAddress: DeveloperConfig.debugEmailAddress
+    )
 
-    init() {
-        logVersionAndBuild()
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(logger)
+                .onAppear {
+                    logVersionAndBuild()
+                }
+        }
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .saveItem) {}
+        }
+
+        Window("Log", id: "logWindow") {
+            LogView(logger: logger)
+        }
+        .defaultSize(CGSize(width: 700, height: 400))
+        .keyboardShortcut("L", modifiers: [.command, .shift])
     }
 
     private func logVersionAndBuild() {
@@ -17,31 +37,6 @@ struct TXVoiceApp: App {
         let build =
             Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")
             as? String ?? "Unknown"
-        LogManager.shared.addLog(
-            "TXVoice starting up - Version: \(version), Build: \(build)")
-    }
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .environmentObject(logManager)
-                .environment(
-                    \.logWindowVisibility,
-                    (isLogWindowVisible, { @Sendable newValue in
-                        Task { @MainActor in
-                            self.isLogWindowVisible = newValue
-                        }
-                    }))
-        }
-        .commands {
-            CommandGroup(replacing: .newItem) {}  // Remove default New menu item
-            CommandGroup(replacing: .saveItem) {}  // Remove default Save menu items
-        }
-
-        Window("Logs", id: "logWindow") {
-            LogView()
-                .environmentObject(logManager)
-        }
-        .defaultSize(width: 600, height: 300)
-        .windowResizability(.contentSize)
+        logger.log(.info, phase: "APP", "TXVoice starting up - Version: \(version), Build: \(build)")
     }
 }

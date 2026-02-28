@@ -1,27 +1,32 @@
 import AVFoundation
 import Foundation
+import SwiftTinyLoggerWindow
 
-final class AudioFileManager: @unchecked Sendable {
-    static let shared = AudioFileManager()
+enum AudioFileManager {
 
-    private init() {}
-
-    func writeBufferToDisk(
-        _ buffer: AVAudioPCMBuffer, to url: URL, sampleRate: Double
-    ) throws {
-        LogManager.shared.addLog(
-            "Converting buffer \(buffer.frameLength) frames \(buffer.format.sampleRate)Hz \(buffer.format.channelCount) channels to \(sampleRate)Hz"
-        )
+    static func writeBufferToDisk(
+        _ buffer: AVAudioPCMBuffer, to url: URL, sampleRate: Double, logger: AppLogger
+    ) async throws {
+        logger.send(.debug, phase: "FILE",
+            "Converting buffer \(buffer.frameLength) frames \(buffer.format.sampleRate)Hz \(buffer.format.channelCount) channels to \(sampleRate)Hz")
         let audioData = convertToInt16Data(from: buffer)
-        LogManager.shared.addLog(
-            "Writing audio buffer to \(url.path) at \(sampleRate)Hz"
-        )
-        try writeWavFile(
-            audioData: audioData, to: url,
-            sampleRate: UInt32(sampleRate))
+        return try await withCheckedThrowingContinuation { continuation in
+            do {
+                logger.send(.debug, phase: "FILE",
+                    "Writing audio buffer to \(url.path) at \(sampleRate)Hz")
+                try writeWavFile(
+                    audioData: audioData, to: url,
+                    sampleRate: UInt32(sampleRate), logger: logger)
+                continuation.resume(returning: ())
+            } catch {
+                logger.send(.error, phase: "FILE",
+                    "Writing audio buffer failed: \(error)")
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
-    private func convertToInt16Data(from buffer: AVAudioPCMBuffer) -> Data {
+    private static func convertToInt16Data(from buffer: AVAudioPCMBuffer) -> Data {
         let floatData = buffer.floatChannelData![0]
         let frameCount = Int(buffer.frameLength)
         var int16Data = Data(count: frameCount * 2)
@@ -39,9 +44,9 @@ final class AudioFileManager: @unchecked Sendable {
         return int16Data
     }
 
-    private func writeWavFile(audioData: Data, to url: URL, sampleRate: UInt32)
-        throws
-    {
+    private static func writeWavFile(
+        audioData: Data, to url: URL, sampleRate: UInt32, logger: AppLogger
+    ) throws {
         let channelCount: UInt16 = 1
         let bitsPerSample: UInt16 = 16
         let byteRate = sampleRate * UInt32(channelCount * bitsPerSample / 8)
@@ -49,7 +54,7 @@ final class AudioFileManager: @unchecked Sendable {
         let dataSize = UInt32(audioData.count)
         let fileSize = 36 + dataSize
 
-        LogManager.shared.addLog("Building Header")
+        logger.send(.debug, phase: "FILE", "Building Header")
 
         var header = Data(capacity: 44)
         header.append(contentsOf: "RIFF".utf8)
@@ -65,12 +70,12 @@ final class AudioFileManager: @unchecked Sendable {
         header.append(contentsOf: "data".utf8)
         header.append(dataSize.littleEndian.data)
 
-        LogManager.shared.addLog("Ensuring directory exists")
+        logger.send(.debug, phase: "FILE", "Ensuring directory exists")
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true, attributes: nil)
 
-        LogManager.shared.addLog("Creating file")
+        logger.send(.debug, phase: "FILE", "Creating file")
         if !FileManager.default.createFile(
             atPath: url.path, contents: nil, attributes: nil)
         {
@@ -79,7 +84,7 @@ final class AudioFileManager: @unchecked Sendable {
                 userInfo: [NSFilePathErrorKey: url.path])
         }
 
-        LogManager.shared.addLog("Opening file for writing")
+        logger.send(.debug, phase: "FILE", "Opening file for writing")
         guard let fileHandle = try? FileHandle(forWritingTo: url) else {
             throw NSError(
                 domain: NSCocoaErrorDomain, code: 4,
@@ -89,19 +94,19 @@ final class AudioFileManager: @unchecked Sendable {
             try? fileHandle.close()
         }
 
-        LogManager.shared.addLog("Writing header")
+        logger.send(.debug, phase: "FILE", "Writing header")
         fileHandle.write(header)
 
         // Write audio data in chunks
         let chunkSize = 4096
         for i in stride(from: 0, to: audioData.count, by: chunkSize) {
-            LogManager.shared.addLog("Writing chunk \(i)")
+            logger.send(.debug, phase: "FILE", "Writing chunk \(i)")
             let upperBound = min(i + chunkSize, audioData.count)
             let chunk = audioData[i..<upperBound]
             fileHandle.write(chunk)
         }
 
-        LogManager.shared.addLog("File writing completed successfully")
+        logger.send(.info, phase: "FILE", "File writing completed successfully")
     }
 }
 

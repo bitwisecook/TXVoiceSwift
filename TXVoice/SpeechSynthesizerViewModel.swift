@@ -1,14 +1,18 @@
 import AVFoundation
 import SwiftUI
+import SwiftTinyLoggerWindow
 
 @MainActor
-class SpeechSynthesizerViewModel: ObservableObject {
-    @Published var status: SaveStatus = .idle
-    @Published var selectedSampleRate: SampleRate = .default
+@Observable
+class SpeechSynthesizerViewModel {
+    var status: SaveStatus = .idle
+    var selectedSampleRate: SampleRate = .default
     private let synthesizer: SpeechSynthesizer
+    private let logger: AppLogger
 
-    init() {
-        synthesizer = SpeechSynthesizer()
+    init(logger: AppLogger) {
+        self.logger = logger
+        self.synthesizer = SpeechSynthesizer(logger: logger)
     }
 
     func setSampleRate(_ sampleRate: SampleRate) async {
@@ -18,16 +22,15 @@ class SpeechSynthesizerViewModel: ObservableObject {
 
     func speak(_ text: String, voice: AVSpeechSynthesisVoice) async {
         status = .previewing
-        LogManager.shared.addLog("Status changed to previewing")
+        logger.log(.info, phase: "SYNTH", "Status changed to previewing")
         do {
             try await synthesizer.speak(text, voice: voice)
             status = .idle
-            LogManager.shared.addLog("Status changed to idle after preview")
+            logger.log(.info, phase: "SYNTH", "Status changed to idle after preview")
         } catch {
-            LogManager.shared.addLog("Error in speak: \(error)")
+            logger.log(.error, phase: "SYNTH", "Error in speak: \(error)")
             status = .failure
-            LogManager.shared.addLog(
-                "Status changed to failure after preview error")
+            logger.log(.info, phase: "SYNTH", "Status changed to failure after preview error")
         }
     }
 
@@ -35,16 +38,15 @@ class SpeechSynthesizerViewModel: ObservableObject {
         _ text: String, voice: AVSpeechSynthesisVoice, to url: URL
     ) async {
         status = .saving
-        LogManager.shared.addLog("Status changed to saving")
+        logger.log(.info, phase: "SYNTH", "Status changed to saving")
         do {
             try await synthesizer.speakAndSave(text, voice: voice, to: url)
             status = .success
-            LogManager.shared.addLog("Status changed to success after save")
+            logger.log(.info, phase: "SYNTH", "Status changed to success after save")
         } catch {
-            LogManager.shared.addLog("Error in speakAndSave: \(error)")
+            logger.log(.error, phase: "SYNTH", "Error in speakAndSave: \(error)")
             status = .failure
-            LogManager.shared.addLog(
-                "Status changed to failure after save error")
+            logger.log(.info, phase: "SYNTH", "Status changed to failure after save error")
         }
     }
 }

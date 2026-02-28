@@ -57,6 +57,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B9AA00032D222A0000AABB03 /* SwiftTinyLoggerWindow in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +119,7 @@
 			);
 			name = TXVoice;
 			packageProductDependencies = (
+				B9AA00022D222A0000AABB02 /* SwiftTinyLoggerWindow */,
 			);
 			productName = TXVoice;
 			productReference = B9B146F02C6F5CB80070079A /* TXVoice.app */;
@@ -202,6 +204,7 @@
 			mainGroup = B9B146E72C6F5CB80070079A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				B9AA00012D222A0000AABB01 /* XCRemoteSwiftPackageReference "SwiftTinyLoggerWindow" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B9B146F12C6F5CB80070079A /* Products */;
@@ -331,7 +334,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -388,7 +391,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -416,7 +419,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoice;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -445,7 +448,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoice;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -461,7 +464,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoiceTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -478,7 +481,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bragi0.TXVoiceTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -558,6 +561,32 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		B9AA00012D222A0000AABB01 /* XCRemoteSwiftPackageReference "SwiftTinyLoggerWindow" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/bitwisecook/SwiftTinyLoggerWindow.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B9AA00022D222A0000AABB02 /* SwiftTinyLoggerWindow */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B9AA00012D222A0000AABB01 /* XCRemoteSwiftPackageReference "SwiftTinyLoggerWindow" */;
+			productName = SwiftTinyLoggerWindow;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin PBXBuildFile section - SwiftTinyLoggerWindow */
+		B9AA00032D222A0000AABB03 /* SwiftTinyLoggerWindow in Frameworks */ = {
+			isa = PBXBuildFile;
+			productRef = B9AA00022D222A0000AABB02 /* SwiftTinyLoggerWindow */;
+		};
+/* End PBXBuildFile section - SwiftTinyLoggerWindow */
 	};
 	rootObject = B9B146E82C6F5CB80070079A /* Project object */;
 }
