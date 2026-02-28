@@ -18,3 +18,5 @@ macOS app for creating `.wav` files for Taranis FrSky and EdgeTX/OpenTX controll
 ## Agent Skills
 
 Reference skills in `.agents/skills/` for SwiftUI, Swift Testing, and Swift Concurrency best practices.
+
+- If more than 2 weeks have passed since the last commit, check for updates to the skills files in `.agents/skills/` before starting work.
