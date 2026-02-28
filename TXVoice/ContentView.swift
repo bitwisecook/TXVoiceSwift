@@ -31,39 +31,34 @@ struct ContentView: View {
     @State private var inputText: String = "Terrain, pull up!"
     @State private var selectedVoice: AVSpeechSynthesisVoice
     @State private var groupedVoices: [VoiceGroup] = []
-    @State private var availableVoices: [AVSpeechSynthesisVoice] = []
     @StateObject private var viewModel = SpeechSynthesizerViewModel()
-    @State private var showDoneMessage = false
-    @State private var doneOpacity: Double = 1.0
     @State private var selectedSampleRate: SampleRate = .default
     @State private var statusOpacity: Double = 1.0
-    @State private var isAnimating: Bool = false
-    @State private var animationTimer: Timer?
-    @EnvironmentObject private var logManager: LogManager
     @Environment(\.logWindowVisibility) private var logWindowVisibility
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
     init() {
         let voices = AVSpeechSynthesisVoice.speechVoices()
-        _selectedVoice = State(initialValue: voices.first!)
         _groupedVoices = State(initialValue: Self.groupVoices(voices))
 
-        let savedVoiceIdentifier = UserDefaults.standard.string(
+        let savedIdentifier = UserDefaults.standard.string(
             forKey: "SelectedVoiceIdentifier")
 
-        if let savedIdentifier = savedVoiceIdentifier,
+        if let savedIdentifier,
             let savedVoice = voices.first(where: {
                 $0.identifier == savedIdentifier
             })
         {
             _selectedVoice = State(initialValue: savedVoice)
         } else if let defaultVoice = AVSpeechSynthesisVoice(
-            language: Locale.current.identifier)
+            language: Locale.current.identifier(.bcp47))
         {
             _selectedVoice = State(initialValue: defaultVoice)
+        } else if let firstVoice = voices.first {
+            _selectedVoice = State(initialValue: firstVoice)
         } else {
-            _selectedVoice = State(initialValue: voices.first!)
+            fatalError("No speech synthesis voices available on this system")
         }
     }
 
@@ -84,7 +79,7 @@ struct ContentView: View {
 
             // Utterance
             TextField("Phrase", text: $inputText)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .textFieldStyle(.roundedBorder)
                 .padding()
 
             // Voice to use
@@ -96,8 +91,8 @@ struct ContentView: View {
                         selection: $selectedVoice, voiceGroups: groupedVoices)
                 }
             }
-            .pickerStyle(MenuPickerStyle())
-            .onChange(of: selectedVoice) { oldVoice, newVoice in
+            .pickerStyle(.menu)
+            .onChange(of: selectedVoice) { newVoice in
                 UserDefaults.standard.set(
                     newVoice.identifier, forKey: "SelectedVoiceIdentifier")
             }
@@ -119,10 +114,10 @@ struct ContentView: View {
                     .background(
                         selectedSampleRate == rate ? Color.blue : Color.clear
                     )
-                    .foregroundColor(
+                    .foregroundStyle(
                         selectedSampleRate == rate ? Color.white : Color.blue
                     )
-                    .cornerRadius(8)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.blue, lineWidth: 1)
@@ -160,22 +155,22 @@ struct ContentView: View {
                     switch viewModel.status {
                     case .idle:
                         Text("idle")
-                            .foregroundColor(Color("MainStatusIdleColor"))
+                            .foregroundStyle(Color("MainStatusIdleColor"))
                     case .saving:
                         Image("custom.waveform.badge.arrow.down")
-                            .foregroundColor(Color("MainStatusSavingColor"))
+                            .foregroundStyle(Color("MainStatusSavingColor"))
                             .font(.system(size: 24))
                     case .success:
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
+                            .foregroundStyle(.green)
                             .font(.system(size: 24))
                     case .failure:
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.red)
+                            .foregroundStyle(.red)
                             .font(.system(size: 24))
                     case .previewing:
                         Image(systemName: "speaker.wave.2.bubble")
-                            .foregroundColor(.orange)
+                            .foregroundStyle(.orange)
                             .font(.system(size: 24))
                     }
                 }
@@ -186,16 +181,16 @@ struct ContentView: View {
         }
         .padding()
         .frame(width: 400)
-        .onChange(of: logWindowVisibility.isVisible) { oldValue, newValue in
+        .onChange(of: logWindowVisibility.isVisible) { newValue in
             if newValue {
                 openWindow(id: "logWindow")
             } else {
                 dismissWindow(id: "logWindow")
             }
         }
-        .onChange(of: viewModel.status) { oldStatus, newStatus in
+        .onChange(of: viewModel.status) { newStatus in
             LogManager.shared.addLog(
-                "Status changed from \(oldStatus) to \(newStatus)")
+                "Status changed to \(newStatus)")
             animateStatusChange(newStatus)
         }
     }
@@ -309,38 +304,21 @@ struct ContentView: View {
         }
 
         switch newStatus {
-        case .success:
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+        case .success, .failure:
+            let delay: Duration = newStatus == .success ? .seconds(1) : .seconds(2)
+            Task {
+                try? await Task.sleep(for: delay)
                 withAnimation(.easeInOut(duration: 0.5)) {
-                    self.statusOpacity = 0
+                    statusOpacity = 0
                 }
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                self.viewModel.status = .idle
+                try? await Task.sleep(for: .seconds(0.5))
+                viewModel.status = .idle
                 withAnimation(.easeInOut(duration: 0.3)) {
-                    self.statusOpacity = 1.0
+                    statusOpacity = 1.0
                 }
             }
-        case .failure:
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    self.statusOpacity = 0
-                }
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                self.viewModel.status = .idle
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    self.statusOpacity = 1.0
-                }
-            }
-        case .idle:
-            do {}
-        case .previewing:
-            do {}
-        case .saving:
-            do {}
+        case .idle, .previewing, .saving:
+            break
         }
     }
 

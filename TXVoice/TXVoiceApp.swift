@@ -26,7 +26,11 @@ struct TXVoiceApp: App {
                 .environmentObject(logManager)
                 .environment(
                     \.logWindowVisibility,
-                    (isLogWindowVisible, { self.isLogWindowVisible = $0 }))
+                    (isLogWindowVisible, { @Sendable newValue in
+                        Task { @MainActor in
+                            self.isLogWindowVisible = newValue
+                        }
+                    }))
         }
         .commands {
             CommandGroup(replacing: .newItem) {}  // Remove default New menu item
@@ -37,8 +41,7 @@ struct TXVoiceApp: App {
             LogView()
                 .environmentObject(logManager)
         }
-        .defaultSize(CGSize(width: 600, height: 300))
-        .keyboardShortcut("L", modifiers: [.command, .shift])
+        .defaultSize(width: 600, height: 300)
         .windowResizability(.contentSize)
     }
 }

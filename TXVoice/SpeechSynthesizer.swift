@@ -10,14 +10,14 @@ enum SpeechSynthesizerError: Error {
     case synthesisIncomplete
 }
 
-actor SpeechSynthesizer: ObservableObject {
+actor SpeechSynthesizer {
     private var synthesizer = AVSpeechSynthesizer()
     private var selectedSampleRate: Double = 32000
     private let delegate: SpeechSynthesizerDelegate
 
     // Constants for buffer management
-    private let initialBufferSeconds: Double = 30  // Initial buffer size in seconds
-    private let bufferGrowthFactor: Double = 1.5  // Factor to grow buffer when needed
+    private let initialBufferSeconds: Double = 30
+    private let bufferGrowthFactor: Double = 1.5
 
     init() {
         let tempSynthesizer = AVSpeechSynthesizer()
@@ -37,7 +37,7 @@ actor SpeechSynthesizer: ObservableObject {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = voice
 
-        return try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { continuation in
             delegate.onUtteranceComplete = { error in
                 if let error = error {
                     continuation.resume(throwing: error)
@@ -52,6 +52,10 @@ actor SpeechSynthesizer: ObservableObject {
     func speakAndSave(
         _ text: String, voice: AVSpeechSynthesisVoice, to url: URL
     ) async throws {
+        // Capture actor-isolated state into locals before entering @Sendable closures
+        let sampleRate = selectedSampleRate
+        let growthFactor = bufferGrowthFactor
+
         LogManager.shared.addLog(
             "Starting speech synthesis and save: '\(text)' with voice '\(voice.name)'"
         )
@@ -60,71 +64,43 @@ actor SpeechSynthesizer: ObservableObject {
         utterance.voice = voice
 
         let format = AVAudioFormat(
-            standardFormatWithSampleRate: selectedSampleRate, channels: 1)!
+            standardFormatWithSampleRate: sampleRate, channels: 1)!
 
-        // Preallocate the buffer
         let initialFrameCapacity = AVAudioFrameCount(
-            initialBufferSeconds * selectedSampleRate)
+            initialBufferSeconds * sampleRate)
         guard
             let initialBuffer = AVAudioPCMBuffer(
                 pcmFormat: format, frameCapacity: initialFrameCapacity)
         else {
             throw SpeechSynthesizerError.noPCMBuffer
         }
-        var accumulatedBuffer = initialBuffer
-        var currentFrame: AVAudioFrameCount = 0
 
-        return try await withCheckedThrowingContinuation { continuation in
-            delegate.onUtteranceComplete = { [weak self] error in
-                guard let self = self else { return }
+        // Use a Sendable wrapper so mutable buffer state can be captured in @Sendable closures
+        let accumulator = BufferAccumulator(buffer: initialBuffer)
+
+        try await withCheckedThrowingContinuation { continuation in
+            delegate.onUtteranceComplete = { error in
                 LogManager.shared.addLog(
-                    "Speech synthesis completed, frames accumulated: \(currentFrame)"
+                    "Speech synthesis completed, frames accumulated: \(accumulator.currentFrame)"
                 )
 
-                Task {
-                    do {
-                        LogManager.shared.addLog(
-                            "Attempting to write to file: \(url.path)")
-                        try await self.writeToFile(
-                            buffer: accumulatedBuffer, url: url)
-                        LogManager.shared.addLog("File written successfully")
-                        continuation.resume()
-                    } catch {
-                        LogManager.shared.addLog(
-                            "Error in writeToFile: \(error.localizedDescription)"
-                        )
-                        if let nsError = error as NSError? {
-                            LogManager.shared.addLog(
-                                "Error domain: \(nsError.domain), code: \(nsError.code)"
-                            )
-                            if let underlyingError = nsError.userInfo[
-                                NSUnderlyingErrorKey] as? NSError
-                            {
-                                LogManager.shared.addLog(
-                                    "Underlying error: \(underlyingError.localizedDescription)"
-                                )
-                                LogManager.shared.addLog(
-                                    "Underlying error domain: \(underlyingError.domain), code: \(underlyingError.code)"
-                                )
-                            }
-                            if let filePath = nsError.userInfo[
-                                NSFilePathErrorKey] as? String
-                            {
-                                LogManager.shared.addLog(
-                                    "File path: \(filePath)")
-                            }
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
 
-                            // Check if the error is related to file permissions
-                            if nsError.domain == NSCocoaErrorDomain
-                                && nsError.code == 513
-                            {
-                                LogManager.shared.addLog(
-                                    "This might be a file permissions issue. Please check the app's sandbox settings."
-                                )
-                            }
-                        }
-                        continuation.resume(throwing: error)
-                    }
+                do {
+                    LogManager.shared.addLog(
+                        "Attempting to write to file: \(url.path)")
+                    try AudioFileManager.shared.writeBufferToDisk(
+                        accumulator.buffer, to: url,
+                        sampleRate: sampleRate)
+                    LogManager.shared.addLog("File written successfully")
+                    continuation.resume()
+                } catch {
+                    LogManager.shared.addLog(
+                        "Error writing file: \(error.localizedDescription)")
+                    continuation.resume(throwing: error)
                 }
             }
 
@@ -136,90 +112,19 @@ actor SpeechSynthesizer: ObservableObject {
                 }
 
                 let convertedBuffer: AVAudioPCMBuffer
-                if pcmBuffer.format.sampleRate != self.selectedSampleRate {
-                    convertedBuffer = self.resample(
-                        buffer: pcmBuffer, toSampleRate: self.selectedSampleRate
-                    )
+                if pcmBuffer.format.sampleRate != sampleRate {
+                    convertedBuffer = Self.resample(
+                        buffer: pcmBuffer, toSampleRate: sampleRate)
                 } else {
                     convertedBuffer = pcmBuffer
                 }
 
-                let framesToAdd = convertedBuffer.frameLength
-                let totalRequiredFrames = currentFrame + framesToAdd
-
-                if totalRequiredFrames > accumulatedBuffer.frameCapacity {
-                    // Need to extend the buffer
-                    let newCapacity = AVAudioFrameCount(
-                        Double(accumulatedBuffer.frameCapacity)
-                            * self.bufferGrowthFactor)
-                    guard
-                        let newBuffer = self.extendBuffer(
-                            accumulatedBuffer, newCapacity: newCapacity)
-                    else {
-                        LogManager.shared.addLog("Failed to extend buffer")
-                        return
-                    }
-                    accumulatedBuffer = newBuffer
-                }
-
-                // Copy new frames into the accumulated buffer
-                let targetBuffer = accumulatedBuffer.floatChannelData![0]
-                    .advanced(by: Int(currentFrame))
-                convertedBuffer.floatChannelData![0].withMemoryRebound(
-                    to: Float.self, capacity: Int(framesToAdd)
-                ) { sourceBuffer in
-                    targetBuffer.initialize(
-                        from: sourceBuffer, count: Int(framesToAdd))
-                }
-
-                currentFrame += framesToAdd
-                accumulatedBuffer.frameLength = currentFrame
-                LogManager.shared.addLog(
-                    "Accumulated \(framesToAdd) frames, total: \(currentFrame)")
+                accumulator.append(convertedBuffer, growthFactor: growthFactor)
             }
         }
     }
 
-    private func writeToFile(buffer: AVAudioPCMBuffer, url: URL) async throws {
-        if buffer.frameLength > 0 {
-            do {
-                LogManager.shared.addLog("Starting to write audio file...")
-                try await AudioFileManager.shared.writeBufferToDisk(
-                    buffer, to: url, sampleRate: self.selectedSampleRate)
-                LogManager.shared.addLog(
-                    "Audio file written successfully to \(url.path)")
-            } catch {
-                LogManager.shared.addLog("Error writing audio file: \(error)")
-                throw error
-            }
-        } else {
-            LogManager.shared.addLog("No audio data to write")
-            throw SpeechSynthesizerError.noAccumulatedBuffer
-        }
-    }
-
-    private func extendBuffer(
-        _ buffer: AVAudioPCMBuffer, newCapacity: AVAudioFrameCount
-    ) -> AVAudioPCMBuffer? {
-        guard
-            let newBuffer = AVAudioPCMBuffer(
-                pcmFormat: buffer.format, frameCapacity: newCapacity)
-        else {
-            return nil
-        }
-
-        let framesToCopy = min(buffer.frameLength, newCapacity)
-        let bytesToCopy = Int(framesToCopy) * MemoryLayout<Float>.size
-
-        memcpy(
-            newBuffer.floatChannelData?[0], buffer.floatChannelData?[0],
-            bytesToCopy)
-        newBuffer.frameLength = framesToCopy
-
-        return newBuffer
-    }
-
-    private func resample(
+    private static func resample(
         buffer: AVAudioPCMBuffer, toSampleRate newSampleRate: Double
     ) -> AVAudioPCMBuffer {
         let inputFormat = buffer.format
@@ -266,8 +171,76 @@ actor SpeechSynthesizer: ObservableObject {
     }
 }
 
-class SpeechSynthesizerDelegate: NSObject, AVSpeechSynthesizerDelegate {
-    var onUtteranceComplete: ((Error?) -> Void)?
+/// Wraps mutable audio buffer accumulation state for use in @Sendable closures.
+/// Safe as @unchecked Sendable because AVSpeechSynthesizer.write delivers
+/// buffer callbacks sequentially, and onUtteranceComplete fires only after
+/// all write callbacks have completed.
+private final class BufferAccumulator: @unchecked Sendable {
+    var buffer: AVAudioPCMBuffer
+    var currentFrame: AVAudioFrameCount = 0
+
+    init(buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func append(_ convertedBuffer: AVAudioPCMBuffer, growthFactor: Double) {
+        let framesToAdd = convertedBuffer.frameLength
+        let totalRequiredFrames = currentFrame + framesToAdd
+
+        if totalRequiredFrames > buffer.frameCapacity {
+            let newCapacity = AVAudioFrameCount(
+                Double(buffer.frameCapacity) * growthFactor)
+            guard
+                let newBuffer = Self.extendBuffer(
+                    buffer, newCapacity: newCapacity)
+            else {
+                LogManager.shared.addLog("Failed to extend buffer")
+                return
+            }
+            buffer = newBuffer
+        }
+
+        let targetBuffer = buffer.floatChannelData![0]
+            .advanced(by: Int(currentFrame))
+        convertedBuffer.floatChannelData![0].withMemoryRebound(
+            to: Float.self, capacity: Int(framesToAdd)
+        ) { sourceBuffer in
+            targetBuffer.initialize(
+                from: sourceBuffer, count: Int(framesToAdd))
+        }
+
+        currentFrame += framesToAdd
+        buffer.frameLength = currentFrame
+        LogManager.shared.addLog(
+            "Accumulated \(framesToAdd) frames, total: \(currentFrame)")
+    }
+
+    private static func extendBuffer(
+        _ buffer: AVAudioPCMBuffer, newCapacity: AVAudioFrameCount
+    ) -> AVAudioPCMBuffer? {
+        guard
+            let newBuffer = AVAudioPCMBuffer(
+                pcmFormat: buffer.format, frameCapacity: newCapacity)
+        else {
+            return nil
+        }
+
+        let framesToCopy = min(buffer.frameLength, newCapacity)
+        let bytesToCopy = Int(framesToCopy) * MemoryLayout<Float>.size
+
+        memcpy(
+            newBuffer.floatChannelData?[0], buffer.floatChannelData?[0],
+            bytesToCopy)
+        newBuffer.frameLength = framesToCopy
+
+        return newBuffer
+    }
+}
+
+final class SpeechSynthesizerDelegate: NSObject, AVSpeechSynthesizerDelegate,
+    @unchecked Sendable
+{
+    var onUtteranceComplete: (@Sendable (Error?) -> Void)?
 
     func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer,

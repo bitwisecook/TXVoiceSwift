@@ -1,34 +1,24 @@
 import AVFoundation
 import Foundation
 
-class AudioFileManager {
+final class AudioFileManager: @unchecked Sendable {
     static let shared = AudioFileManager()
 
     private init() {}
 
     func writeBufferToDisk(
         _ buffer: AVAudioPCMBuffer, to url: URL, sampleRate: Double
-    ) async throws {
+    ) throws {
         LogManager.shared.addLog(
             "Converting buffer \(buffer.frameLength) frames \(buffer.format.sampleRate)Hz \(buffer.format.channelCount) channels to \(sampleRate)Hz"
         )
         let audioData = convertToInt16Data(from: buffer)
-        return try await withCheckedThrowingContinuation { continuation in
-            do {
-                LogManager.shared.addLog(
-                    "Writing audio buffer to \(url.path) at \(sampleRate)Hz"
-                )
-                try writeWavFile(
-                    audioData: audioData, to: url,
-                    sampleRate: UInt32(sampleRate))
-                continuation.resume(returning: ())
-            } catch {
-                LogManager.shared.addLog(
-                    "Writing audio buffer failed: \(error)"
-                )
-                continuation.resume(throwing: error)
-            }
-        }
+        LogManager.shared.addLog(
+            "Writing audio buffer to \(url.path) at \(sampleRate)Hz"
+        )
+        try writeWavFile(
+            audioData: audioData, to: url,
+            sampleRate: UInt32(sampleRate))
     }
 
     private func convertToInt16Data(from buffer: AVAudioPCMBuffer) -> Data {

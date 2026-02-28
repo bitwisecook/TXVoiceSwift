@@ -1,13 +1,14 @@
 import SwiftUI
 
+@MainActor
 class LogManager: ObservableObject {
     static let shared = LogManager()
     @Published var logs: [String] = []
 
     private init() {}
 
-    func addLog(_ message: String) {
-        DispatchQueue.main.async {
+    nonisolated func addLog(_ message: String) {
+        Task { @MainActor in
             let newLogs = message.split(
                 separator: "\n", omittingEmptySubsequences: false
             ).map(String.init)
@@ -21,11 +22,11 @@ class LogManager: ObservableObject {
 }
 
 struct LogWindowVisibilityKey: EnvironmentKey {
-    static let defaultValue: (Bool, (Bool) -> Void) = (false, { _ in })
+    static let defaultValue: (Bool, @Sendable (Bool) -> Void) = (false, { _ in })
 }
 
 extension EnvironmentValues {
-    var logWindowVisibility: (isVisible: Bool, update: (Bool) -> Void) {
+    var logWindowVisibility: (isVisible: Bool, update: @Sendable (Bool) -> Void) {
         get { self[LogWindowVisibilityKey.self] }
         set { self[LogWindowVisibilityKey.self] = newValue }
     }
@@ -51,21 +52,21 @@ struct LogView: View {
                         .id("logContent")
                 }
                 .background(Color(NSColor.textBackgroundColor))
-                .cornerRadius(4)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
                 .onAppear {
                     scrollProxy = proxy
                     scrollToBottom()
                 }
             }
         }
-        .onChange(of: logManager.logs) { _, _ in
+        .onChange(of: logManager.logs) { _ in
             scrollToBottom()
         }
         HStack {
             Spacer()
             HStack {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
+                    .foregroundStyle(.green)
                     .opacity(showCopyConfirmation ? 1 : 0)
                     .scaleEffect(showCopyConfirmation ? 1 : 0.5)
                 Button("Copy Logs") {
@@ -76,9 +77,7 @@ struct LogView: View {
 
             Button("Close") {
                 dismiss()
-                DispatchQueue.main.async {
-                    logWindowVisibility.update(false)
-                }
+                logWindowVisibility.update(false)
             }
             .keyboardShortcut(.escape, modifiers: [])
             .padding()
@@ -94,7 +93,8 @@ struct LogView: View {
             showCopyConfirmation = true
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+        Task {
+            try? await Task.sleep(for: .seconds(1))
             withAnimation(.easeInOut(duration: 0.2)) {
                 showCopyConfirmation = false
             }
@@ -102,7 +102,7 @@ struct LogView: View {
     }
 
     private func scrollToBottom() {
-        DispatchQueue.main.async {
+        Task {
             withAnimation {
                 scrollProxy?.scrollTo("logContent", anchor: .bottom)
             }
